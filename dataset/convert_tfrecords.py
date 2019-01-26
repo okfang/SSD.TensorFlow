@@ -43,19 +43,19 @@ import dataset_common
        |    |->Annotations/
        |    |->...
 '''
-tf.app.flags.DEFINE_string('dataset_directory', '/media/rs/7A0EE8880EE83EAF/Detections/PASCAL/VOC',
+tf.app.flags.DEFINE_string('dataset_directory', '/home/dxfang/dataset/pascal_voc',
                            'All datas directory')
-tf.app.flags.DEFINE_string('train_splits', 'VOC2007, VOC2012',
+tf.app.flags.DEFINE_string('train_splits', 'voc2007_train, voc2012_train',
                            'Comma-separated list of the training data sub-directory')
-tf.app.flags.DEFINE_string('validation_splits', 'VOC2007TEST',
+tf.app.flags.DEFINE_string('validation_splits', 'voc2007_test',
                            'Comma-separated list of the validation data sub-directory')
-tf.app.flags.DEFINE_string('output_directory', '/media/rs/7A0EE8880EE83EAF/Detections/SSD/dataset/tfrecords',
+tf.app.flags.DEFINE_string('output_directory', '/home/dxfang/dataset/tfrecords/pascal_voc/',
                            'Output data directory')
 tf.app.flags.DEFINE_integer('train_shards', 16,
                             'Number of shards in training TFRecord files.')
 tf.app.flags.DEFINE_integer('validation_shards', 16,
                             'Number of shards in validation TFRecord files.')
-tf.app.flags.DEFINE_integer('num_threads', 8,
+tf.app.flags.DEFINE_integer('num_threads', 16,
                             'Number of threads to preprocess the images.')
 RANDOM_SEED = 180428
 

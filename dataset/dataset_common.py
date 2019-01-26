@@ -236,3 +236,5 @@ def slim_get_batch(num_classes, batch_size, split_name, file_pattern, num_reader
                     allow_smaller_final_batch=(not is_training),
                     num_threads=num_preprocessing_threads,
                     capacity=64 * batch_size)
+    # return tf.data.Dataset.batch([image, filename, shape, gt_targets, gt_labels, gt_scores],
+    #                 batch_size=batch_size,)
