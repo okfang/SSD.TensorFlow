@@ -18,12 +18,13 @@ from __future__ import print_function
 
 import os
 # 添加路径
-# import sys
-# from os.path import abspath, join, dirname
-# sys.path.insert(0,abspath(dirname(__file__)))
+import sys
+from os.path import abspath, join, dirname
+sys.path.insert(0,abspath(dirname(__file__)))
 
 import tensorflow as tf
 
+from dataset.dataset_util import get_dataset
 from net import ssd_net
 
 from dataset import dataset_common
@@ -171,7 +172,7 @@ def get_init_fn():
 global_anchor_info = dict()
 
 
-def input_pipeline(dataset_pattern='train-*', is_training=True, batch_size=FLAGS.batch_size):
+def input_pipeline(file_pattern='train-*', is_training=True, batch_size=FLAGS.batch_size):
     def input_fn():
         # 训练时图片尺寸
         out_shape = [FLAGS.train_image_size] * 2
@@ -216,19 +217,20 @@ def input_pipeline(dataset_pattern='train-*', is_training=True, batch_size=FLAGS
                                                                                                  all_num_anchors_spatial)
         # 构建数据的输入流：可以根据训练过程，选择数据源
         # 重构：使用原生的tf api
-        image, _, shape, loc_targets, cls_targets, match_scores = dataset_common.slim_get_batch(FLAGS.num_classes,
-                                                                                                batch_size,
-                                                                                                (
-                                                                                                    'train' if is_training else 'val'),
-                                                                                                os.path.join(
-                                                                                                    FLAGS.data_dir,
-                                                                                                    dataset_pattern),
-                                                                                                FLAGS.num_readers,
-                                                                                                FLAGS.num_preprocessing_threads,
-                                                                                                image_preprocessing_fn,
-                                                                                                anchor_encoder_fn,
-                                                                                                num_epochs=FLAGS.train_epochs,
-                                                                                                is_training=is_training)
+        # image, _, shape, loc_targets, cls_targets, match_scores = dataset_common.slim_get_batch(FLAGS.num_classes,
+        #                                                                                                 batch_size,
+        #                                                                                                 (
+        #                                                                                                     'train' if is_training else 'val'),
+        #                                                                                                 os.path.join(
+        #                                                                                                     FLAGS.data_dir,
+        #                                                                                                     dataset_pattern),
+        #                                                                                                 FLAGS.num_readers,
+        #                                                                                                 FLAGS.num_preprocessing_threads,
+        #                                                                                                 image_preprocessing_fn,
+        #                                                                                                 anchor_encoder_fn,
+        #                                                                                                 num_epochs=FLAGS.train_epochs,
+        #                                                                                                 is_training=is_training)
+
         # 需要保存anchor_encoder_decoder的状态，
         # 因为self._all_anchors保存了新建的所有anchors
         # 在计算loss时需要这些信息
@@ -239,9 +241,11 @@ def input_pipeline(dataset_pattern='train-*', is_training=True, batch_size=FLAGS
             'all_num_anchors_depth': all_num_anchors_depth}
 
         # 为了使用MirroredStrategy.需要使用dataset
-        features = image
-        labels = {'shape': shape, 'loc_targets': loc_targets, 'cls_targets': cls_targets, 'match_scores': match_scores}
-        return features,labels
+        dataset = get_dataset(file_pattern=file_pattern, is_training=True, batch_size=batch_size,
+                              image_preprocessing_fn=image_preprocessing_fn,
+                              anchor_encoder_fn=anchor_encoder_fn)
+        print(dataset)
+        return dataset
 
     return input_fn
 
@@ -285,6 +289,8 @@ def modified_smooth_l1(bbox_pred, bbox_targets, bbox_inside_weights=1., bbox_out
 
 def ssd_model_fn(features, labels, mode, params):
     """model_fn for SSD to be used with our Estimator."""
+    print("------------features_____",features)
+    print("------------features_____",labels)
     shape = labels['shape']
     loc_targets = labels['loc_targets']
     cls_targets = labels['cls_targets']
@@ -535,7 +541,7 @@ def main(_):
     # hook = tf.train.ProfilerHook(save_steps=50, output_dir='.', show_memory=True)
     print('Starting a training cycle.')
     ssd_detector.train(
-        input_fn=input_pipeline(dataset_pattern='train-*', is_training=True, batch_size=FLAGS.batch_size),
+        input_fn=input_pipeline(file_pattern='/home/dxfang/dataset/tfrecords/pascal_voc/train-000*', is_training=True, batch_size=FLAGS.batch_size),
         hooks=[logging_hook], max_steps=FLAGS.max_number_of_steps)
 
 

@@ -138,7 +138,7 @@ def slim_get_batch(num_classes, batch_size, split_name, file_pattern, num_reader
     """Gets a dataset tuple with instructions for reading Pascal VOC dataset.
 
     Args:
-      num_classes: total class numbers in dataset.
+      num_classes: total class numbers in dataset.4
       batch_size: the size of each batch.
       split_name: 'train' of 'val'.
       file_pattern: The file pattern to use when matching the dataset sources (full path).
