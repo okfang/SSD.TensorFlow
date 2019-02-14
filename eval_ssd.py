@@ -189,11 +189,14 @@ def select_bboxes(scores_pred, bboxes_pred, num_classes, select_threshold):
     selected_scores = {}
     with tf.name_scope('select_bboxes', [scores_pred, bboxes_pred]):
         for class_ind in range(1, num_classes):
+            # ************************1.找到每个类别对应的边框
             class_scores = scores_pred[:, class_ind]
             select_mask = class_scores > select_threshold
-
+            # ************************2.把不对应的边框置为0
             select_mask = tf.cast(select_mask, tf.float32)
+            # 存储每个类别可能的边框
             selected_bboxes[class_ind] = tf.multiply(bboxes_pred, tf.expand_dims(select_mask, axis=-1))
+            # 存储每个类别，每个边框得到的分数
             selected_scores[class_ind] = tf.multiply(class_scores, select_mask)
 
     return selected_bboxes, selected_scores
@@ -241,18 +244,25 @@ def nms_bboxes(scores_pred, bboxes_pred, nms_topk, nms_threshold, name):
 
 def parse_by_class(cls_pred, bboxes_pred, num_classes, select_threshold, min_size, keep_topk, nms_topk, nms_threshold):
     with tf.name_scope('select_bboxes', [cls_pred, bboxes_pred]):
+        # *************************************1.计算概率
         scores_pred = tf.nn.softmax(cls_pred)
+        # *************************************2.整理得到每个类别包含哪些边框，以及对应边框的分数
         selected_bboxes, selected_scores = select_bboxes(scores_pred, bboxes_pred, num_classes, select_threshold)
+
         for class_ind in range(1, num_classes):
             ymin, xmin, ymax, xmax = tf.unstack(selected_bboxes[class_ind], 4, axis=-1)
             #ymin, xmin, ymax, xmax = tf.split(selected_bboxes[class_ind], 4, axis=-1)
             #ymin, xmin, ymax, xmax = tf.squeeze(ymin), tf.squeeze(xmin), tf.squeeze(ymax), tf.squeeze(xmax)
+            # **********************************3.防止坐标超出（0,1）范围
             ymin, xmin, ymax, xmax = clip_bboxes(ymin, xmin, ymax, xmax, 'clip_bboxes_{}'.format(class_ind))
+            # **********************************4.过滤超出最小尺寸的预测边框
             ymin, xmin, ymax, xmax, selected_scores[class_ind] = filter_bboxes(selected_scores[class_ind],
                                                 ymin, xmin, ymax, xmax, min_size, 'filter_bboxes_{}'.format(class_ind))
+            # *********************************5.根据score进行排序，并选择top k个边框
             ymin, xmin, ymax, xmax, selected_scores[class_ind] = sort_bboxes(selected_scores[class_ind],
                                                 ymin, xmin, ymax, xmax, keep_topk, 'sort_bboxes_{}'.format(class_ind))
             selected_bboxes[class_ind] = tf.stack([ymin, xmin, ymax, xmax], axis=-1)
+            # *********************************6.进行nms，最后得到想要保留的边框
             selected_scores[class_ind], selected_bboxes[class_ind] = nms_bboxes(selected_scores[class_ind], selected_bboxes[class_ind], nms_topk, nms_threshold, 'nms_bboxes_{}'.format(class_ind))
 
         return selected_bboxes, selected_scores
@@ -289,9 +299,11 @@ def ssd_model_fn(features, labels, mode, params):
         cls_pred = tf.reshape(cls_pred, [-1, params['num_classes']])
         location_pred = tf.reshape(location_pred, [-1, 4])
 
+    # 在cpu上进行后处理？
     with tf.device('/cpu:0'):
         bboxes_pred = decode_fn(location_pred)
         bboxes_pred = tf.concat(bboxes_pred, axis=0)
+        # **********************************1.对预测的边框和对应的类别进行处理（nms）
         selected_bboxes, selected_scores = parse_by_class(cls_pred, bboxes_pred,
                                                         params['num_classes'], params['select_threshold'], params['min_size'],
                                                         params['keep_topk'], params['nms_topk'], params['nms_threshold'])
@@ -301,6 +313,7 @@ def ssd_model_fn(features, labels, mode, params):
         predictions['scores_{}'.format(class_ind)] = tf.expand_dims(selected_scores[class_ind], axis=0)
         predictions['bboxes_{}'.format(class_ind)] = tf.expand_dims(selected_bboxes[class_ind], axis=0)
 
+    # *************************************************2.后续计算loss只是为了进行summary
     flaten_cls_targets = tf.reshape(cls_targets, [-1])
     flaten_match_scores = tf.reshape(match_scores, [-1])
     flaten_loc_targets = tf.reshape(loc_targets, [-1, 4])
