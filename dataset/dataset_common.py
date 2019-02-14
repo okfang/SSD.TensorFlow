@@ -134,7 +134,7 @@ data_splits_num = {
     'val': 4952,
 }
 
-def slim_get_batch(num_classes, batch_size, split_name, file_pattern, num_readers, num_preprocessing_threads, image_preprocessing_fn, anchor_encoder, num_epochs=None, is_training=True):
+def  slim_get_batch(num_classes, batch_size, split_name, file_pattern, num_readers, num_preprocessing_threads, image_preprocessing_fn, anchor_encoder, num_epochs=None, is_training=True):
     """Gets a dataset tuple with instructions for reading Pascal VOC dataset.
 
     Args:
@@ -205,7 +205,7 @@ def slim_get_batch(num_classes, batch_size, split_name, file_pattern, num_reader
             common_queue_min=8 * batch_size,
             shuffle=is_training,
             num_epochs=num_epochs)
-
+    # gbboxes_raw:  是boxes列表 [(ymin,xmin,ymax,xmax),....]
     [org_image, filename, shape, glabels_raw, gbboxes_raw, isdifficult] = provider.get(['image', 'filename', 'shape',
                                                                      'object/label',
                                                                      'object/bbox',
@@ -216,7 +216,7 @@ def slim_get_batch(num_classes, batch_size, split_name, file_pattern, num_reader
         isdifficult_mask =tf.cond(tf.count_nonzero(isdifficult, dtype=tf.int32) < tf.shape(isdifficult)[0],
                                 lambda : isdifficult < tf.ones_like(isdifficult),
                                 lambda : tf.one_hot(0, tf.shape(isdifficult)[0], on_value=True, off_value=False, dtype=tf.bool))
-
+        # 去掉困难的样本
         glabels_raw = tf.boolean_mask(glabels_raw, isdifficult_mask)
         gbboxes_raw = tf.boolean_mask(gbboxes_raw, isdifficult_mask)
 
@@ -229,7 +229,7 @@ def slim_get_batch(num_classes, batch_size, split_name, file_pattern, num_reader
         glabels, gbboxes = glabels_raw, gbboxes_raw
 
     gt_targets, gt_labels, gt_scores = anchor_encoder(glabels, gbboxes)
-
+    # gt_targets:(num_anchors,4) gt_lables:(num_anchors,)
     return tf.train.batch([image, filename, shape, gt_targets, gt_labels, gt_scores],
                     dynamic_pad=False,
                     batch_size=batch_size,
