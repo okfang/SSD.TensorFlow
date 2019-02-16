@@ -169,42 +169,14 @@ def get_init_fn():
 # some tensors used by model_fn must be created in input_fn to ensure they are in the same graph
 # but when we put these tensors to labels's dict, the replicate_model_fn will split them into each GPU
 # the problem is that they shouldn't be splited
-global_anchor_info = dict()
+
+# global_anchor_info = dict()
 
 
 def input_pipeline(file_pattern='train-*', is_training=True, batch_size=FLAGS.batch_size):
-    def input_fn():
+    def input_fn(params=None):
         # ****************************************************1.规定训练时图片尺寸的要求（300*300）
         out_shape = [FLAGS.train_image_size] * 2
-
-        # ****************************************************2.定义anchor生成器，用于生成一系列default anchors
-        anchor_creator = anchor_manipulator.AnchorCreator(out_shape,
-                                                          layers_shapes=[(38, 38), (19, 19), (10, 10), (5, 5), (3, 3),
-                                                                         (1, 1)],
-                                                          anchor_scales=[(0.1,), (0.2,), (0.375,), (0.55,), (0.725,),
-                                                                         (0.9,)],
-                                                          extra_anchor_scales=[(0.1414,), (0.2739,), (0.4541,),
-                                                                               (0.6315,), (0.8078,), (0.9836,)],
-                                                          anchor_ratios=[(1., 2., .5), (1., 2., 3., .5, 0.3333),
-                                                                         (1., 2., 3., .5, 0.3333),
-                                                                         (1., 2., 3., .5, 0.3333), (1., 2., .5),
-                                                                         (1., 2., .5)],
-                                                          layer_steps=[8, 16, 32, 64, 100, 300])
-
-        # ***************************************************3.使用anchor生成器获取所欲的anchors（x,y,h,w）
-        # all_anchors格式：[(y_on_image,x_on_image),....] 大小：num_layer, y_on_image(feature_shape[0],feature_shape[1],1)
-        all_anchors, all_num_anchors_depth, all_num_anchors_spatial = anchor_creator.get_all_anchors()
-
-        # **************************************************4.计算每层的anchor数量
-        num_anchors_per_layer = []
-        for ind in range(len(all_anchors)):
-            num_anchors_per_layer.append(all_num_anchors_depth[ind] * all_num_anchors_spatial[ind])#feature map大小以及每个位置的anchor数量
-
-        # **************************************************5.构建anchor处理类：主要完成anchor坐标的转化
-        anchor_encoder_decoder = anchor_manipulator.AnchorEncoder(allowed_borders=[1.0] * 6,
-                                                                  positive_threshold=FLAGS.match_threshold,
-                                                                  ignore_threshold=FLAGS.neg_threshold,
-                                                                  prior_scaling=[0.1, 0.1, 0.2, 0.2])
 
         # *************************************************6.定义模型的预处理方法：可以根据是否训练进行不同的处理
         image_preprocessing_fn = lambda image_, labels_, bboxes_: ssd_preprocessing.preprocess_image(image_, labels_,
@@ -212,12 +184,6 @@ def input_pipeline(file_pattern='train-*', is_training=True, batch_size=FLAGS.ba
                                                                                                      is_training=is_training,
                                                                                                      data_format=FLAGS.data_format,
                                                                                                      output_rgb=False)
-
-        # *************************************************7.将anchor和gtbox编码成（ymin,xmin,ymax,xmax）的格式
-        anchor_encoder_fn = lambda glabels_, gbboxes_: anchor_encoder_decoder.encode_all_anchors(glabels_, gbboxes_,
-                                                                                                 all_anchors,
-                                                                                                 all_num_anchors_depth,
-                                                                                                 all_num_anchors_spatial)
         # 构建数据的输入流：可以根据训练过程，选择数据源
         # 重构：使用原生的tf api
         # image, _, shape, loc_targets, cls_targets, match_scores = dataset_common.slim_get_batch(FLAGS.num_classes,
@@ -234,18 +200,10 @@ def input_pipeline(file_pattern='train-*', is_training=True, batch_size=FLAGS.ba
         #                                                                                                 num_epochs=FLAGS.train_epochs,
         #                                                                                                 is_training=is_training)
 
-        # **************************************************9.构建解码函数，（预测框，需要对应的default anchor才能解编码）
-        global global_anchor_info
-        global_anchor_info = {
-            'decode_fn': lambda pred: anchor_encoder_decoder.decode_all_anchors(pred, num_anchors_per_layer),
-            'num_anchors_per_layer': num_anchors_per_layer,
-            'all_num_anchors_depth': all_num_anchors_depth}
         # **************************************************10.为model_fn构建features和labels
         # 为了使用MirroredStrategy.需要使用dataset
         dataset = get_dataset(file_pattern=file_pattern, is_training=True, batch_size=batch_size,
-                              image_preprocessing_fn=image_preprocessing_fn,
-                              anchor_encoder_fn=anchor_encoder_fn)
-        print(dataset)
+                              image_preprocessing_fn=image_preprocessing_fn)
         return dataset
 
     return input_fn
@@ -290,18 +248,66 @@ def modified_smooth_l1(bbox_pred, bbox_targets, bbox_inside_weights=1., bbox_out
 
 def ssd_model_fn(features, labels, mode, params):
     """model_fn for SSD to be used with our Estimator."""
-    # loc_targets：(batch,num_anchors,4)
-    # cls_targets: (batch,num_anchors)
+    # glabels: label列表
+    # gbboxes: boxes列表
     shape = labels['shape']
-    loc_targets = labels['loc_targets']
-    cls_targets = labels['cls_targets']
-    match_scores = labels['match_scores']
+    glabels = labels['glabels']
+    gbboxes = labels['gbboxes']
 
-    # ***************************************1.获取解码函数，将预测结果解码为边框
-    global global_anchor_info
-    decode_fn = global_anchor_info['decode_fn']
-    num_anchors_per_layer = global_anchor_info['num_anchors_per_layer']
-    all_num_anchors_depth = global_anchor_info['all_num_anchors_depth']
+    print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印glabels：",glabels)
+    print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印gbboxes：",gbboxes)
+    print(gbboxes)
+
+    # -------------------------------------进行数据处理，生成训练样本---------------------------------
+
+    # *********************1.规定训练时图片尺寸的要求（300*300）
+    out_shape = [FLAGS.train_image_size] * 2
+
+    # ********************2.定义anchor生成器，用于生成一系列default anchors
+    anchor_creator = anchor_manipulator.AnchorCreator(out_shape,
+                                                      layers_shapes=[(38, 38), (19, 19), (10, 10), (5, 5), (3, 3),
+                                                                     (1, 1)],
+                                                      anchor_scales=[(0.1,), (0.2,), (0.375,), (0.55,), (0.725,),
+                                                                     (0.9,)],
+                                                      extra_anchor_scales=[(0.1414,), (0.2739,), (0.4541,),
+                                                                           (0.6315,), (0.8078,), (0.9836,)],
+                                                      anchor_ratios=[(1., 2., .5), (1., 2., 3., .5, 0.3333),
+                                                                     (1., 2., 3., .5, 0.3333),
+                                                                     (1., 2., 3., .5, 0.3333), (1., 2., .5),
+                                                                     (1., 2., .5)],
+                                                      layer_steps=[8, 16, 32, 64, 100, 300])
+
+    # *******************3.使用anchor生成器获取所欲的anchors（x,y,h,w）
+    # all_anchors格式：[(y_on_image,x_on_image),....] 大小：num_layer, y_on_image(feature_shape[0],feature_shape[1],1)
+    all_anchors, all_num_anchors_depth, all_num_anchors_spatial = anchor_creator.get_all_anchors()
+
+    # ******************4.计算每层的anchor数量
+    num_anchors_per_layer = []
+    for ind in range(len(all_anchors)):
+        num_anchors_per_layer.append(
+            all_num_anchors_depth[ind] * all_num_anchors_spatial[ind])  # feature map大小以及每个位置的anchor数量
+
+    # ****************5.构建anchor处理类：主要完成anchor坐标的转化
+    anchor_encoder_decoder = anchor_manipulator.AnchorEncoder(allowed_borders=[1.0] * 6,
+                                                              positive_threshold=FLAGS.match_threshold,
+                                                              ignore_threshold=FLAGS.neg_threshold,
+                                                              prior_scaling=[0.1, 0.1, 0.2, 0.2])
+
+    # ****************7.将anchor和gtbox编码成（ymin,xmin,ymax,xmax）的格式
+    anchor_encoder_fn = lambda glabels_, gbboxes_: anchor_encoder_decoder.encode_all_anchors(glabels_, gbboxes_,
+                                                                                             all_anchors,
+                                                                                             all_num_anchors_depth,
+                                                                                             all_num_anchors_spatial)
+
+    # ***************8.获取解码函数，将预测结果解码为边框
+    decode_fn = lambda pred: anchor_encoder_decoder.decode_all_anchors(pred, num_anchors_per_layer)
+    num_anchors_per_layer = num_anchors_per_layer
+    all_num_anchors_depth = all_num_anchors_depth
+
+    # 生成训练样本
+    loc_targets, cls_targets, match_scores = anchor_encoder_fn(glabels,gbboxes)
+    print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印loc_targets：", loc_targets)
+
 
     # bboxes_pred = decode_fn(loc_targets[0])
     # bboxes_pred = [tf.reshape(preds, [-1, 4]) for preds in bboxes_pred]
@@ -319,6 +325,7 @@ def ssd_model_fn(features, labels, mode, params):
         # **************************************************1.获取模型基本框架类
         backbone = ssd_net.VGG16Backbone(params['data_format'])
         # **************************************************2.获取feature_map
+        print("************************************打印features:",features.graph)
         feature_layers = backbone.forward(features, training=(mode == tf.estimator.ModeKeys.TRAIN))
         # **************************************************3.使用feature map进行预测，得到预测框和类别
         # location_pred:feature_map_layer的预测列表，[(batch,feature_map_shape[0],feature_map_shape[1],anchor_per_layer_depth*4)]
@@ -349,6 +356,7 @@ def ssd_model_fn(features, labels, mode, params):
                 # 这里又将平铺的location_pred转为（batch，...，4）
                 # 需要注意：训练时可以batch，验证时只能一张图片（验证时可以不用裁剪图片）
                 # 这里预测的boxes_pred是以feature_layer来组织，
+                print("****************************打印location_pred：",location_pred.graph)
                 bboxes_pred = tf.map_fn(lambda _preds: decode_fn(_preds),
                                         tf.reshape(location_pred, [tf.shape(features)[0], -1, 4]),
                                         dtype=[tf.float32] * len(num_anchors_per_layer), back_prop=False)
@@ -485,7 +493,7 @@ def ssd_model_fn(features, labels, mode, params):
         # Batch norm requires update_ops to be added as a train_op dependency.
         # 需要注意，batch normal涉及到更新每一层的feature maps
         # ****************************************************28.注意依赖，防止最后进行优化时，用了没有更新的参数
-        update_ops = tf.get_collectoin(tf.GraphKeys.UPDATE_OPS)
+        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops):
             train_op = optimizer.minimize(total_loss, global_step)
     else:
@@ -497,7 +505,7 @@ def ssd_model_fn(features, labels, mode, params):
         loss=total_loss,
         train_op=train_op,
         eval_metric_ops=metrics,
-        scaffold=tf.train.Scaffold(init_fn=get_init_fn()))
+        scaffold=tf.train.Scaffold(init_fn=None))
 
 
 def parse_comma_list(args):

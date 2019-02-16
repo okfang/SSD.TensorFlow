@@ -140,6 +140,7 @@ class AnchorEncoder(object):
         # y_on_image, x_on_image: layers_shapes[0] * layers_shapes[1]
         # h_on_image, w_on_image: num_anchors
         # *****************************************************1.确保all_num_anchors_depth和all_num_anchors_spatial第1维是相同的
+        # all_anchors: ([],[])
         assert (len(all_num_anchors_depth)==len(all_num_anchors_spatial)) and (len(all_num_anchors_depth)==len(all_anchors)), 'inconsist num layers for anchors.'
         with tf.name_scope('encode_all_anchors'):
             num_layers = len(all_num_anchors_depth)
@@ -154,6 +155,7 @@ class AnchorEncoder(object):
                 # h*w*1  1*num_scale可以broadcast为 h*w*num_scale
                 # anchor[0]:y_on_image  anchor[1]:x_on_image
                 anchors_ymin_, anchors_xmin_, anchors_ymax_, anchors_xmax_ = self.center2point(anchor[0], anchor[1], anchor[2], anchor[3])
+                print("**********************************打印anchors_ymin_：",anchors_ymin_.graph)
                 # anchors_ymin_的形状为[(feature_shape[0]*feature_shape[1]*num_anchor_per_depth),...]
                 list_anchors_ymin.append(tf.reshape(anchors_ymin_, [-1]))
                 list_anchors_xmin.append(tf.reshape(anchors_xmin_, [-1]))
@@ -221,6 +223,7 @@ class AnchorEncoder(object):
             # *******************************************12.把anchor和gt_boxes的坐标转化为中心坐标，并计算增量
             gt_cy, gt_cx, gt_h, gt_w = self.point2center(gt_ymin, gt_xmin, gt_ymax, gt_xmax)
             anchor_cy, anchor_cx, anchor_h, anchor_w = self.point2center(anchors_ymin, anchors_xmin, anchors_ymax, anchors_xmax)
+            print("*****************************打印anchor_h:", anchor_h.graph)
             # encode features.
             # the prior_scaling (in fact is 5 and 10) is use for balance the regression loss of center and with(or height)
             gt_cy = (gt_cy - anchor_cy) / anchor_h / self._prior_scaling[0]
@@ -240,13 +243,14 @@ class AnchorEncoder(object):
             # *******************************************15.更新_all_anchors：将所有的anchor情况存储起来
             # 需要注意：训练时，decode一个batch可以共用用同一组anchors,验证时只能单独一张图片，不然后面用于decode时不匹配
             self._all_anchors = (anchor_cy, anchor_cx, anchor_h, anchor_w)
+            # all_anchors = (anchor_cy, anchor_cx, anchor_h, anchor_w)
             # ******************************************16.返回边框回归用的坐标和分类用的类别
             return gt_targets, gt_labels, gt_scores
 
     # return a list, of which each is:
     #   shape: [feature_h, feature_w, num_anchors, 4]
     #   order: ymin, xmin, ymax, xmax
-    def decode_all_anchors(self, pred_location, num_anchors_per_layer):
+    def decode_all_anchors(self, pred_location,all_anchors, num_anchors_per_layer):
         assert self._all_anchors is not None, 'no anchors to decode.'
         with tf.name_scope('decode_all_anchors', [pred_location]):
             # *******************************************1.读取default anchors的坐标
@@ -371,6 +375,7 @@ class AnchorCreator(object):
                                                         self._anchor_ratios[layer_index],
                                                         self._layer_steps[layer_index],
                                                         self._anchor_offset[layer_index])
+            print("************************打印anchors_this_layer：",anchors_this_layer[0].graph)
             all_anchors.append(anchors_this_layer[:-2])
             all_num_anchors_depth.append(anchors_this_layer[-2])
             all_num_anchors_spatial.append(anchors_this_layer[-1])

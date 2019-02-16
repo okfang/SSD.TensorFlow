@@ -21,7 +21,6 @@ def read_dataset(file_read_func, file_pattern,num_readers=4):
     print("------------check files-------------")
     for filename in filenames:
         print(filename)
-
     filename_dataset = tf.data.Dataset.from_tensor_slices(filenames)
     if num_readers > 1:
         tf.logging.warning('`shuffle` is false, but the input data stream is '
@@ -81,6 +80,7 @@ def get_dataset(file_pattern=None,is_training=True, batch_size=32,image_preproce
         """""
         # slim decode tf example
         keys = decoder.list_items()
+        print("************************************打印serialized_example",serialized_example.graph)
         tensors = decoder.decode(serialized_example, items=keys)
         tensor_dict = dict(zip(keys, tensors))
         org_image = tensor_dict['image']
@@ -89,6 +89,8 @@ def get_dataset(file_pattern=None,is_training=True, batch_size=32,image_preproce
         glabels_raw = tensor_dict['object/label']
         gbboxes_raw = tensor_dict['object/bbox']
         isdifficult = tensor_dict['object/difficult']
+
+        print("*****************************打印org_image:",org_image.graph)
 
         # preprocessing image
         if is_training:
@@ -105,14 +107,15 @@ def get_dataset(file_pattern=None,is_training=True, batch_size=32,image_preproce
 
         if is_training:
             image, glabels, gbboxes = image_preprocessing_fn(org_image, glabels_raw, gbboxes_raw)
+            print("*****************************打印image",image.graph)
+            print("*****************************打印glabels",glabels.graph)
+            print("*****************************打印gbboxes",gbboxes.graph)
         else:
             image = image_preprocessing_fn(org_image, glabels_raw, gbboxes_raw)
             glabels, gbboxes = glabels_raw, gbboxes_raw
 
-        gt_targets, gt_labels, gt_scores = anchor_encoder_fn(glabels, gbboxes)
-
         features = image
-        labels = {'shape': shape, 'loc_targets': gt_targets, 'cls_targets': gt_labels, 'match_scores': gt_scores}
+        labels = {'shape': shape, 'gbboxes': gbboxes, 'glabels': glabels}
         return (features,labels)
     # 读取dataset
     dataset = read_dataset(
@@ -121,6 +124,6 @@ def get_dataset(file_pattern=None,is_training=True, batch_size=32,image_preproce
     dataset = dataset.map(process_fn,num_parallel_calls=batch_size*2)
     print("----------------------",dataset)
     dataset = dataset.batch(batch_size=batch_size, drop_remainder=True)
-    dataset = dataset.prefetch(2)
+    dataset = dataset.prefetch(buffer_size=None)
 
     return dataset
