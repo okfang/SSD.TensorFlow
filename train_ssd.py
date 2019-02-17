@@ -51,7 +51,7 @@ tf.app.flags.DEFINE_string(
 tf.app.flags.DEFINE_integer(
     'num_classes', 21, 'Number of classes to use in the dataset.')
 tf.app.flags.DEFINE_string(
-    'model_dir', './logs/',
+    'model_dir', './logs_test/',
     'The directory where the model will be stored.')
 tf.app.flags.DEFINE_integer(
     'log_every_n_steps', 10,
@@ -170,13 +170,34 @@ def get_init_fn():
 # but when we put these tensors to labels's dict, the replicate_model_fn will split them into each GPU
 # the problem is that they shouldn't be splited
 
-# global_anchor_info = dict()
-
+global_anchor_info = dict()
 
 def input_pipeline(file_pattern='train-*', is_training=True, batch_size=FLAGS.batch_size):
     def input_fn(params=None):
         # ****************************************************1.规定训练时图片尺寸的要求（300*300）
         out_shape = [FLAGS.train_image_size] * 2
+        # *******************************************如果是训练过程，由于训练图片的大小一致，可以体现生成anchors并存储
+        if is_training:
+            anchor_creator = anchor_manipulator.AnchorCreator(out_shape,
+                                                              layers_shapes=[(38, 38), (19, 19), (10, 10), (5, 5),
+                                                                             (3, 3),
+                                                                             (1, 1)],
+                                                              anchor_scales=[(0.1,), (0.2,), (0.375,), (0.55,),
+                                                                             (0.725,),
+                                                                             (0.9,)],
+                                                              extra_anchor_scales=[(0.1414,), (0.2739,), (0.4541,),
+                                                                                   (0.6315,), (0.8078,), (0.9836,)],
+                                                              anchor_ratios=[(1., 2., .5), (1., 2., 3., .5, 0.3333),
+                                                                             (1., 2., 3., .5, 0.3333),
+                                                                             (1., 2., 3., .5, 0.3333), (1., 2., .5),
+                                                                             (1., 2., .5)],
+                                                              layer_steps=[8, 16, 32, 64, 100, 300])
+
+            all_anchors, all_num_anchors_depth, all_num_anchors_spatial = anchor_creator.get_all_anchors()
+            global global_anchor_info
+            global_anchor_info["all_anchors"] = all_anchors
+            global_anchor_info["all_num_anchors_depth"] =  all_num_anchors_depth
+            global_anchor_info["all_num_anchors_spatial"] =  all_num_anchors_spatial
 
         # *************************************************6.定义模型的预处理方法：可以根据是否训练进行不同的处理
         image_preprocessing_fn = lambda image_, labels_, bboxes_: ssd_preprocessing.preprocess_image(image_, labels_,
@@ -184,24 +205,8 @@ def input_pipeline(file_pattern='train-*', is_training=True, batch_size=FLAGS.ba
                                                                                                      is_training=is_training,
                                                                                                      data_format=FLAGS.data_format,
                                                                                                      output_rgb=False)
-        # 构建数据的输入流：可以根据训练过程，选择数据源
-        # 重构：使用原生的tf api
-        # image, _, shape, loc_targets, cls_targets, match_scores = dataset_common.slim_get_batch(FLAGS.num_classes,
-        #                                                                                                 batch_size,
-        #                                                                                                 (
-        #                                                                                                     'train' if is_training else 'val'),
-        #                                                                                                 os.path.join(
-        #                                                                                                     FLAGS.data_dir,
-        #                                                                                                     dataset_pattern),
-        #                                                                                                 FLAGS.num_readers,
-        #                                                                                                 FLAGS.num_preprocessing_threads,
-        #                                                                                                 image_preprocessing_fn,
-        #                                                                                                 anchor_encoder_fn,
-        #                                                                                                 num_epochs=FLAGS.train_epochs,
-        #                                                                                                 is_training=is_training)
-
         # **************************************************10.为model_fn构建features和labels
-        # 为了使用MirroredStrategy.需要使用dataset
+        # 为了使用MirroredStrategy.需要返回dataset
         dataset = get_dataset(file_pattern=file_pattern, is_training=True, batch_size=batch_size,
                               image_preprocessing_fn=image_preprocessing_fn)
         return dataset
@@ -246,39 +251,34 @@ def modified_smooth_l1(bbox_pred, bbox_targets, bbox_inside_weights=1., bbox_out
 #     imsave(os.path.join('./debug/{}.jpg').format(save_image_with_bbox.counter), img_to_draw)
 #     return save_image_with_bbox.counter
 
+def unpad_tensor(tensor,num_groundtruth_boxes):
+    """将input_fn得到的label在num_boxes维度进行unpad,得到真实的boxes个数"""
+    tensor = tf.unstack(tensor)
+    num_groundtruth_boxes = tf.unstack(num_groundtruth_boxes)
+    unpadded_tensor_list = []
+    for num_gt, padded_tensor in zip( num_groundtruth_boxes,tensor):
+        tensor_shape = padded_tensor.shape.as_list()
+        slice_begin = tf.zeros([len(tensor_shape)], dtype=tf.int32)
+        slice_size = tf.stack(
+            [num_gt] + [-1 if dim is None else dim for dim in tensor_shape[1:]])
+        unpadded_tensor = tf.slice(padded_tensor, slice_begin, slice_size)
+        unpadded_tensor_list.append(unpadded_tensor)
+    return unpadded_tensor_list
+
 def ssd_model_fn(features, labels, mode, params):
     """model_fn for SSD to be used with our Estimator."""
-    # glabels: label列表
-    # gbboxes: boxes列表
     shape = labels['shape']
+    num_groundtruth_boxes = labels['num_groundtruth_boxes']
     glabels = labels['glabels']
     gbboxes = labels['gbboxes']
 
-    # print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印glabels：",glabels)
-    # print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印gbboxes：",gbboxes)
+    # *********************1.将glabel和gbboxes unpading成原来groundtruth_num_boxes数量
+    glabels_list = unpad_tensor(glabels,num_groundtruth_boxes)
+    gbboxes_list = unpad_tensor(gbboxes,num_groundtruth_boxes)
 
     # -------------------------------------进行数据处理，生成训练样本---------------------------------
-
     # *********************1.规定训练时图片尺寸的要求（300*300）
     out_shape = [FLAGS.train_image_size] * 2
-
-    # ********************2.定义anchor生成器，用于生成一系列default anchors
-    anchor_creator = anchor_manipulator.AnchorCreator(out_shape,
-                                                      layers_shapes=[(38, 38), (19, 19), (10, 10), (5, 5), (3, 3),
-                                                                     (1, 1)],
-                                                      anchor_scales=[(0.1,), (0.2,), (0.375,), (0.55,), (0.725,),
-                                                                     (0.9,)],
-                                                      extra_anchor_scales=[(0.1414,), (0.2739,), (0.4541,),
-                                                                           (0.6315,), (0.8078,), (0.9836,)],
-                                                      anchor_ratios=[(1., 2., .5), (1., 2., 3., .5, 0.3333),
-                                                                     (1., 2., 3., .5, 0.3333),
-                                                                     (1., 2., 3., .5, 0.3333), (1., 2., .5),
-                                                                     (1., 2., .5)],
-                                                      layer_steps=[8, 16, 32, 64, 100, 300])
-
-    # *******************3.使用anchor生成器获取所欲的anchors（x,y,h,w）
-    # all_anchors格式：[(y_on_image,x_on_image),....] 大小：num_layer, y_on_image(feature_shape[0],feature_shape[1],1)
-    all_anchors, all_num_anchors_depth, all_num_anchors_spatial = anchor_creator.get_all_anchors()
 
     # ******************4.计算每层的anchor数量
     num_anchors_per_layer = []
@@ -292,6 +292,7 @@ def ssd_model_fn(features, labels, mode, params):
                                                               ignore_threshold=FLAGS.neg_threshold,
                                                               prior_scaling=[0.1, 0.1, 0.2, 0.2])
 
+    # *****************根据图片大小，分别生成中心坐标格式的anchors(x,y,h,w)以及四点坐标格式的anchors（ymin,xmin,）
     # ****************7.将anchor和gtbox编码成（ymin,xmin,ymax,xmax）的格式
     anchor_encoder_fn = lambda glabels_, gbboxes_: anchor_encoder_decoder.encode_all_anchors(glabels_, gbboxes_,
                                                                                              all_anchors,
@@ -302,25 +303,18 @@ def ssd_model_fn(features, labels, mode, params):
     decode_fn = lambda pred: anchor_encoder_decoder.decode_all_anchors(pred, num_anchors_per_layer)
     num_anchors_per_layer = num_anchors_per_layer
     all_num_anchors_depth = all_num_anchors_depth
-    glabels_list = tf.split(glabels,num_or_size_splits=glabels.shape[0],axis=0)
-    gbboxes_list = tf.split(gbboxes,num_or_size_splits=gbboxes.shape[0],axis=0)
 
-    # print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印glabels_list：",glabels_list)
+
     # 生成训练样本
     loc_targets_list, cls_targets_list, match_scores_list = [], [], []
-    for ind in range(len(glabels_list)):
-        glabel = tf.squeeze(glabels_list[ind],axis=0)
-        gbbox = tf.squeeze(gbboxes_list[ind],axis=0)
+    for glabel,gbbox in zip(glabels_list,gbboxes_list):
         loc_target,cls_target,match_score = anchor_encoder_fn(glabel, gbbox)
         loc_targets_list.append(loc_target)
         cls_targets_list.append(cls_target)
         match_scores_list.append(match_score)
-    # print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印loc_targets_list：", loc_targets_list)
     loc_targets = tf.stack(loc_targets_list,axis=0)
     cls_targets = tf.stack(cls_targets_list,axis=0)
     match_scores = tf.stack(match_scores_list,axis=0)
-    print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印loc_targets：", loc_targets)
-    print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印cls_targets：", cls_targets)
 
 
     # bboxes_pred = decode_fn(loc_targets[0])
@@ -393,7 +387,7 @@ def ssd_model_fn(features, labels, mode, params):
 
                 batch_negtive_mask = tf.equal(cls_targets,
                                               0)  # tf.logical_and(tf.equal(cls_targets, 0), match_scores > 0.)
-                print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印batch_negtive_mask：",batch_negtive_mask)
+                # print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印batch_negtive_mask：",batch_negtive_mask)
                 batch_n_negtives = tf.count_nonzero(batch_negtive_mask, -1)
                 # ******************************************12.根据negative_ratio计算需要保留的负样本个数
                 batch_n_neg_select = tf.cast(params['negative_ratio'] * tf.cast(batch_n_positives, tf.float32),

@@ -11,6 +11,46 @@ slim = tf.contrib.slim
 """
 
 """
+def pad_or_clip_nd(tensor, output_shape):
+  """Pad or Clip given tensor to the output shape.
+
+  Args:
+    tensor: Input tensor to pad or clip.
+    output_shape: A list of integers / scalar tensors (or None for dynamic dim)
+      representing the size to pad or clip each dimension of the input tensor.
+
+  Returns:
+    Input tensor padded and clipped to the output shape.
+  """
+  tensor_shape = tf.shape(tensor)
+  clip_size = [
+      tf.where(tensor_shape[i] - shape > 0, shape, -1)
+      if shape is not None else -1 for i, shape in enumerate(output_shape)
+  ]
+  clipped_tensor = tf.slice(
+      tensor,
+      begin=tf.zeros(len(clip_size), dtype=tf.int32),
+      size=clip_size)
+
+  # Pad tensor if the shape of clipped tensor is smaller than the expected
+  # shape.
+  clipped_tensor_shape = tf.shape(clipped_tensor)
+  trailing_paddings = [
+      shape - clipped_tensor_shape[i] if shape is not None else 0
+      for i, shape in enumerate(output_shape)
+  ]
+  paddings = tf.stack(
+      [
+          tf.zeros(len(trailing_paddings), dtype=tf.int32),
+          trailing_paddings
+      ],
+      axis=1)
+  padded_tensor = tf.pad(clipped_tensor, paddings=paddings)
+  output_static_shape = [
+      dim if not isinstance(dim, tf.Tensor) else None for dim in output_shape
+  ]
+  padded_tensor.set_shape(output_static_shape)
+  return padded_tensor
 
 def read_dataset(file_read_func, file_pattern,num_readers=4):
     """
@@ -18,9 +58,9 @@ def read_dataset(file_read_func, file_pattern,num_readers=4):
     """
     filenames = tf.gfile.Glob(file_pattern)
     # 答应文件是否齐全
-    print("------------check files-------------")
-    for filename in filenames:
-        print(filename)
+    # print("------------check files-------------")
+    # for filename in filenames:
+    #     print(filename)
     filename_dataset = tf.data.Dataset.from_tensor_slices(filenames)
     if num_readers > 1:
         tf.logging.warning('`shuffle` is false, but the input data stream is '
@@ -80,7 +120,6 @@ def get_dataset(file_pattern=None,is_training=True, batch_size=32,image_preproce
         """""
         # slim decode tf example
         keys = decoder.list_items()
-        # print("************************************打印serialized_example",serialized_example.graph)
         tensors = decoder.decode(serialized_example, items=keys)
         tensor_dict = dict(zip(keys, tensors))
         org_image = tensor_dict['image']
@@ -89,8 +128,6 @@ def get_dataset(file_pattern=None,is_training=True, batch_size=32,image_preproce
         glabels_raw = tensor_dict['object/label']
         gbboxes_raw = tensor_dict['object/bbox']
         isdifficult = tensor_dict['object/difficult']
-
-        # print("*****************************打印org_image:",org_image.graph)
 
         # preprocessing image
         if is_training:
@@ -107,22 +144,24 @@ def get_dataset(file_pattern=None,is_training=True, batch_size=32,image_preproce
 
         if is_training:
             image, glabels, gbboxes = image_preprocessing_fn(org_image, glabels_raw, gbboxes_raw)
-            # print("*****************************打印image",image.graph)
-            # print("*****************************打印glabels",glabels.graph)
-            # print("*****************************打印gbboxes",gbboxes.graph)
         else:
             image = image_preprocessing_fn(org_image, glabels_raw, gbboxes_raw)
             glabels, gbboxes = glabels_raw, gbboxes_raw
 
+        # padding in num_bboxes dimension 防止batch内样本形状不一
+        num_groundtruth_boxes = tf.shape(gbboxes)[0]
+        max_num_bboxes = 50
+        glabels = pad_or_clip_nd(glabels,[max_num_bboxes])
+        gbboxes = pad_or_clip_nd(gbboxes,[max_num_bboxes,4])
+
         features = image
-        labels = {'shape': shape, 'gbboxes': gbboxes, 'glabels': glabels}
+        labels = {'shape': shape,'num_groundtruth_boxes':num_groundtruth_boxes, 'gbboxes': gbboxes, 'glabels': glabels}
         return (features,labels)
     # 读取dataset
     dataset = read_dataset(
         functools.partial(tf.data.TFRecordDataset, buffer_size=8 * 1000 * 1000),file_pattern)
     # 预处理
     dataset = dataset.map(process_fn,num_parallel_calls=batch_size*2)
-    print("----------------------",dataset)
     dataset = dataset.batch(batch_size=batch_size, drop_remainder=True)
     dataset = dataset.prefetch(buffer_size=None)
 
