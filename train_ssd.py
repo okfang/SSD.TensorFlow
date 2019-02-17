@@ -73,7 +73,7 @@ tf.app.flags.DEFINE_integer(
     'max_number_of_steps', 120000,
     'The max number of steps to use for training.')
 tf.app.flags.DEFINE_integer(
-    'batch_size', 32,
+    'batch_size',16,
     'Batch size for training and evaluation.')
 tf.app.flags.DEFINE_string(
     'data_format', 'channels_first',  # 'channels_first' or 'channels_last'
@@ -254,9 +254,8 @@ def ssd_model_fn(features, labels, mode, params):
     glabels = labels['glabels']
     gbboxes = labels['gbboxes']
 
-    print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印glabels：",glabels)
-    print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印gbboxes：",gbboxes)
-    print(gbboxes)
+    # print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印glabels：",glabels)
+    # print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印gbboxes：",gbboxes)
 
     # -------------------------------------进行数据处理，生成训练样本---------------------------------
 
@@ -303,10 +302,25 @@ def ssd_model_fn(features, labels, mode, params):
     decode_fn = lambda pred: anchor_encoder_decoder.decode_all_anchors(pred, num_anchors_per_layer)
     num_anchors_per_layer = num_anchors_per_layer
     all_num_anchors_depth = all_num_anchors_depth
+    glabels_list = tf.split(glabels,num_or_size_splits=glabels.shape[0],axis=0)
+    gbboxes_list = tf.split(gbboxes,num_or_size_splits=gbboxes.shape[0],axis=0)
 
+    # print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印glabels_list：",glabels_list)
     # 生成训练样本
-    loc_targets, cls_targets, match_scores = anchor_encoder_fn(glabels,gbboxes)
+    loc_targets_list, cls_targets_list, match_scores_list = [], [], []
+    for ind in range(len(glabels_list)):
+        glabel = tf.squeeze(glabels_list[ind],axis=0)
+        gbbox = tf.squeeze(gbboxes_list[ind],axis=0)
+        loc_target,cls_target,match_score = anchor_encoder_fn(glabel, gbbox)
+        loc_targets_list.append(loc_target)
+        cls_targets_list.append(cls_target)
+        match_scores_list.append(match_score)
+    # print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印loc_targets_list：", loc_targets_list)
+    loc_targets = tf.stack(loc_targets_list,axis=0)
+    cls_targets = tf.stack(cls_targets_list,axis=0)
+    match_scores = tf.stack(match_scores_list,axis=0)
     print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印loc_targets：", loc_targets)
+    print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印cls_targets：", cls_targets)
 
 
     # bboxes_pred = decode_fn(loc_targets[0])
@@ -325,7 +339,7 @@ def ssd_model_fn(features, labels, mode, params):
         # **************************************************1.获取模型基本框架类
         backbone = ssd_net.VGG16Backbone(params['data_format'])
         # **************************************************2.获取feature_map
-        print("************************************打印features:",features.graph)
+        # print("************************************打印features:",features.graph)
         feature_layers = backbone.forward(features, training=(mode == tf.estimator.ModeKeys.TRAIN))
         # **************************************************3.使用feature map进行预测，得到预测框和类别
         # location_pred:feature_map_layer的预测列表，[(batch,feature_map_shape[0],feature_map_shape[1],anchor_per_layer_depth*4)]
@@ -356,7 +370,7 @@ def ssd_model_fn(features, labels, mode, params):
                 # 这里又将平铺的location_pred转为（batch，...，4）
                 # 需要注意：训练时可以batch，验证时只能一张图片（验证时可以不用裁剪图片）
                 # 这里预测的boxes_pred是以feature_layer来组织，
-                print("****************************打印location_pred：",location_pred.graph)
+                # print("****************************打印location_pred：",location_pred.graph)
                 bboxes_pred = tf.map_fn(lambda _preds: decode_fn(_preds),
                                         tf.reshape(location_pred, [tf.shape(features)[0], -1, 4]),
                                         dtype=[tf.float32] * len(num_anchors_per_layer), back_prop=False)
@@ -379,6 +393,7 @@ def ssd_model_fn(features, labels, mode, params):
 
                 batch_negtive_mask = tf.equal(cls_targets,
                                               0)  # tf.logical_and(tf.equal(cls_targets, 0), match_scores > 0.)
+                print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印batch_negtive_mask：",batch_negtive_mask)
                 batch_n_negtives = tf.count_nonzero(batch_negtive_mask, -1)
                 # ******************************************12.根据negative_ratio计算需要保留的负样本个数
                 batch_n_neg_select = tf.cast(params['negative_ratio'] * tf.cast(batch_n_positives, tf.float32),
