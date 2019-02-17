@@ -237,7 +237,7 @@ def input_pipeline(file_pattern='train-*', is_training=True, batch_size=FLAGS.ba
         # **************************************************9.构建解码函数，（预测框，需要对应的default anchor才能解编码）
         global global_anchor_info
         global_anchor_info = {
-            'decode_fn': lambda pred: anchor_encoder_decoder.decode_all_anchors(pred, num_anchors_per_layer),
+            'decode_fn': lambda pred,new_all_anchors: anchor_encoder_decoder.decode_all_anchors(pred,new_all_anchors, num_anchors_per_layer),
             'num_anchors_per_layer': num_anchors_per_layer,
             'all_num_anchors_depth': all_num_anchors_depth}
         # **************************************************10.为model_fn构建features和labels
@@ -296,6 +296,8 @@ def ssd_model_fn(features, labels, mode, params):
     loc_targets = labels['loc_targets']
     cls_targets = labels['cls_targets']
     match_scores = labels['match_scores']
+    new_all_anchors = labels['new_all_anchors'][0][0],labels['new_all_anchors'][1][0],labels['new_all_anchors'][2][0],labels['new_all_anchors'][3][0]
+    # print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印new_all_anchors：",new_all_anchors)
 
     # ***************************************1.获取解码函数，将预测结果解码为边框
     global global_anchor_info
@@ -349,14 +351,14 @@ def ssd_model_fn(features, labels, mode, params):
                 # 这里又将平铺的location_pred转为（batch，...，4）
                 # 需要注意：训练时可以batch，验证时只能一张图片（验证时可以不用裁剪图片）
                 # 这里预测的boxes_pred是以feature_layer来组织，
-                bboxes_pred = tf.map_fn(lambda _preds: decode_fn(_preds),
+                bboxes_pred = tf.map_fn(lambda _preds: decode_fn(_preds,new_all_anchors),
                                         tf.reshape(location_pred, [tf.shape(features)[0], -1, 4]),
                                         dtype=[tf.float32] * len(num_anchors_per_layer), back_prop=False)
                 # cls_targets = tf.Print(cls_targets, [tf.shape(bboxes_pred[0]),tf.shape(bboxes_pred[1]),tf.shape(bboxes_pred[2]),tf.shape(bboxes_pred[3])])
                 # ***************************************8.reshape成（batch*num_anchors,4）
                 bboxes_pred = [tf.reshape(preds, [-1, 4]) for preds in bboxes_pred]
                 bboxes_pred = tf.concat(bboxes_pred, axis=0)
-                # *****************************************9.将样本gound_turth也平铺（去掉batch维度）
+                # *****************************************9.将样本gound_turth也平铺（去掉batch维度）,用于计算cls_accuracy准确率
                 flaten_cls_targets = tf.reshape(cls_targets, [-1])
                 flaten_match_scores = tf.reshape(match_scores, [-1])
                 flaten_loc_targets = tf.reshape(loc_targets, [-1, 4])
@@ -415,7 +417,7 @@ def ssd_model_fn(features, labels, mode, params):
                     'classes': tf.argmax(cls_pred, axis=-1),#这里是部分参与训练的anchors
                     'probabilities': tf.reduce_max(tf.nn.softmax(cls_pred, name='softmax_tensor'), axis=-1),
                     'loc_predict': bboxes_pred}#这里是所有anchors，应该也进行boolean mask
-                #*********************************************18. 计算分类的准确率
+                #*********************************************18. 计算分类的准确率(hard negative mining 后的准确率)
                 cls_accuracy = tf.metrics.accuracy(flaten_cls_targets, predictions['classes'])
                 metrics = {'cls_accuracy': cls_accuracy}
 
@@ -485,7 +487,7 @@ def ssd_model_fn(features, labels, mode, params):
         # Batch norm requires update_ops to be added as a train_op dependency.
         # 需要注意，batch normal涉及到更新每一层的feature maps
         # ****************************************************28.注意依赖，防止最后进行优化时，用了没有更新的参数
-        update_ops = tf.get_collectoin(tf.GraphKeys.UPDATE_OPS)
+        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops):
             train_op = optimizer.minimize(total_loss, global_step)
     else:
@@ -531,7 +533,8 @@ def main(_):
         log_step_count_steps=FLAGS.log_every_n_steps).replace(
         session_config=config).replace(
         # 添加gpu训练策略
-        train_distribute=strategy)
+        train_distribute=strategy
+    )
 
     # replicate_ssd_model_fn = tf.contrib.estimator.replicate_model_fn(ssd_model_fn, loss_reduction=tf.losses.Reduction.MEAN)
     # ********************************************************************4.构建estimator

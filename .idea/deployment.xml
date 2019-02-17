@@ -2,10 +2,24 @@
 <project version="4">
   <component name="PublishConfigData" autoUpload="Always" serverName="gpuserver">
     <serverData>
-      <paths name="gpuserver">
+      <paths name="145.185">
         <serverdata>
           <mappings>
             <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="Copy of project-level server 'kingdom'">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="gpuserver">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/python/ssd_tf" local="$PROJECT_DIR$" web="/" />
           </mappings>
         </serverdata>
       </paths>

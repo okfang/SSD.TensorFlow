@@ -18,9 +18,9 @@ def read_dataset(file_read_func, file_pattern,num_readers=4):
     """
     filenames = tf.gfile.Glob(file_pattern)
     # 答应文件是否齐全
-    print("------------check files-------------")
-    for filename in filenames:
-        print(filename)
+    # print("------------check files-------------")
+    # for filename in filenames:
+    #     print(filename)
 
     filename_dataset = tf.data.Dataset.from_tensor_slices(filenames)
     if num_readers > 1:
@@ -109,10 +109,10 @@ def get_dataset(file_pattern=None,is_training=True, batch_size=32,image_preproce
             image = image_preprocessing_fn(org_image, glabels_raw, gbboxes_raw)
             glabels, gbboxes = glabels_raw, gbboxes_raw
 
-        gt_targets, gt_labels, gt_scores = anchor_encoder_fn(glabels, gbboxes)
+        gt_targets, gt_labels, gt_scores,new_all_anchors = anchor_encoder_fn(glabels, gbboxes)
 
         features = image
-        labels = {'shape': shape, 'loc_targets': gt_targets, 'cls_targets': gt_labels, 'match_scores': gt_scores}
+        labels = {'shape': shape, 'loc_targets': gt_targets, 'cls_targets': gt_labels, 'match_scores': gt_scores,'new_all_anchors':new_all_anchors}
         return (features,labels)
     # 读取dataset
     dataset = read_dataset(

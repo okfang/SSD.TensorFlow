@@ -239,18 +239,20 @@ class AnchorEncoder(object):
             gt_targets = tf.expand_dims(tf.cast(matched_gt_mask, tf.float32), -1) * gt_targets
             # *******************************************15.更新_all_anchors：将所有的anchor情况存储起来
             # 需要注意：训练时，decode一个batch可以共用用同一组anchors,验证时只能单独一张图片，不然后面用于decode时不匹配
-            self._all_anchors = (anchor_cy, anchor_cx, anchor_h, anchor_w)
+            # self._all_anchors = (anchor_cy, anchor_cx, anchor_h, anchor_w)
+            new_all_anchors = (anchor_cy, anchor_cx, anchor_h, anchor_w)
             # ******************************************16.返回边框回归用的坐标和分类用的类别
-            return gt_targets, gt_labels, gt_scores
+            return gt_targets, gt_labels, gt_scores,new_all_anchors
 
     # return a list, of which each is:
     #   shape: [feature_h, feature_w, num_anchors, 4]
     #   order: ymin, xmin, ymax, xmax
-    def decode_all_anchors(self, pred_location, num_anchors_per_layer):
-        assert self._all_anchors is not None, 'no anchors to decode.'
+    def decode_all_anchors(self, pred_location,new_all_anchors,num_anchors_per_layer):
+        # assert self._all_anchors is not None, 'no anchors to decode.'
         with tf.name_scope('decode_all_anchors', [pred_location]):
             # *******************************************1.读取default anchors的坐标
-            anchor_cy, anchor_cx, anchor_h, anchor_w = self._all_anchors
+            # anchor_cy, anchor_cx, anchor_h, anchor_w = self._all_anchors
+            anchor_cy, anchor_cx, anchor_h, anchor_w = new_all_anchors
             # *******************************************2.将预测的边框偏移转化为中心坐标
             pred_h = tf.exp(pred_location[:, -2] * self._prior_scaling[2]) * anchor_h
             pred_w = tf.exp(pred_location[:, -1] * self._prior_scaling[3]) * anchor_w
