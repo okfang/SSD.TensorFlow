@@ -171,6 +171,95 @@ def get_init_fn():
 # but when we put these tensors to labels's dict, the replicate_model_fn will split them into each GPU
 # the problem is that they shouldn't be splited
 
+
+def select_bboxes(scores_pred, bboxes_pred, num_classes, select_threshold):
+    selected_bboxes = {}
+    selected_scores = {}
+    with tf.name_scope('select_bboxes', [scores_pred, bboxes_pred]):
+        for class_ind in range(1, num_classes):
+            # ************************1.找到每个类别对应的边框
+            class_scores = scores_pred[:, class_ind]
+            select_mask = class_scores > select_threshold
+            # ************************2.把不对应的边框置为0
+            select_mask = tf.cast(select_mask, tf.float32)
+            # 存储每个类别可能的边框
+            selected_bboxes[class_ind] = tf.multiply(bboxes_pred, tf.expand_dims(select_mask, axis=-1))
+            # 存储每个类别，每个边框得到的分数
+            selected_scores[class_ind] = tf.multiply(class_scores, select_mask)
+
+    return selected_bboxes, selected_scores
+
+def clip_bboxes(ymin, xmin, ymax, xmax, name):
+    with tf.name_scope(name, 'clip_bboxes', [ymin, xmin, ymax, xmax]):
+        ymin = tf.maximum(ymin, 0.)
+        xmin = tf.maximum(xmin, 0.)
+        ymax = tf.minimum(ymax, 1.)
+        xmax = tf.minimum(xmax, 1.)
+
+        ymin = tf.minimum(ymin, ymax)
+        xmin = tf.minimum(xmin, xmax)
+
+        return ymin, xmin, ymax, xmax
+
+def filter_bboxes(scores_pred, ymin, xmin, ymax, xmax, min_size, name):
+    with tf.name_scope(name, 'filter_bboxes', [scores_pred, ymin, xmin, ymax, xmax]):
+        width = xmax - xmin
+        height = ymax - ymin
+
+        filter_mask = tf.logical_and(width > min_size, height > min_size)
+
+        filter_mask = tf.cast(filter_mask, tf.float32)
+        return tf.multiply(ymin, filter_mask), tf.multiply(xmin, filter_mask), \
+                tf.multiply(ymax, filter_mask), tf.multiply(xmax, filter_mask), tf.multiply(scores_pred, filter_mask)
+
+def sort_bboxes(scores_pred, ymin, xmin, ymax, xmax, keep_topk, name):
+    with tf.name_scope(name, 'sort_bboxes', [scores_pred, ymin, xmin, ymax, xmax]):
+        cur_bboxes = tf.shape(scores_pred)[0]
+        scores, idxes = tf.nn.top_k(scores_pred, k=tf.minimum(keep_topk, cur_bboxes), sorted=True)
+
+        ymin, xmin, ymax, xmax = tf.gather(ymin, idxes), tf.gather(xmin, idxes), tf.gather(ymax, idxes), tf.gather(xmax, idxes)
+
+        paddings_scores = tf.expand_dims(tf.stack([0, tf.maximum(keep_topk-cur_bboxes, 0)], axis=0), axis=0)
+
+        return tf.pad(ymin, paddings_scores, "CONSTANT"), tf.pad(xmin, paddings_scores, "CONSTANT"),\
+                tf.pad(ymax, paddings_scores, "CONSTANT"), tf.pad(xmax, paddings_scores, "CONSTANT"),\
+                tf.pad(scores, paddings_scores, "CONSTANT")
+
+def nms_bboxes(scores_pred, bboxes_pred, nms_topk, nms_threshold, name):
+    with tf.name_scope(name, 'nms_bboxes', [scores_pred, bboxes_pred]):
+        idxes = tf.image.non_max_suppression(bboxes_pred, scores_pred, nms_topk, nms_threshold)
+        return tf.gather(scores_pred, idxes), tf.gather(bboxes_pred, idxes)
+
+def post_process(cls_pred, bboxes_pred, num_classes, select_threshold, min_size, keep_topk, nms_topk, nms_threshold):
+    with tf.name_scope('select_bboxes', [cls_pred, bboxes_pred]):
+        # calculate probability
+        scores_pred = tf.nn.softmax(cls_pred)
+        # organize boxes by classs, return a dict: {"class_id":suitable_bboxes_tensor}
+        selected_bboxes, selected_scores = select_bboxes(scores_pred, bboxes_pred, num_classes, select_threshold)
+
+        for class_ind in range(1, num_classes):
+            ymin, xmin, ymax, xmax = tf.unstack(selected_bboxes[class_ind], 4, axis=-1)
+            #ymin, xmin, ymax, xmax = tf.split(selected_bboxes[class_ind], 4, axis=-1)
+            #ymin, xmin, ymax, xmax = tf.squeeze(ymin), tf.squeeze(xmin), tf.squeeze(ymax), tf.squeeze(xmax)
+
+            # predicted boxes may be invalid
+            ymin, xmin, ymax, xmax = clip_bboxes(ymin, xmin, ymax, xmax, 'clip_bboxes_{}'.format(class_ind))
+
+            # filter boxes with too small size
+            ymin, xmin, ymax, xmax, selected_scores[class_ind] = filter_bboxes(selected_scores[class_ind],
+                                                ymin, xmin, ymax, xmax, min_size, 'filter_bboxes_{}'.format(class_ind))
+
+            # sort bboxes to choose candidate boxes for nms()
+            ymin, xmin, ymax, xmax, selected_scores[class_ind] = sort_bboxes(selected_scores[class_ind],
+                                                ymin, xmin, ymax, xmax, keep_topk, 'sort_bboxes_{}'.format(class_ind))
+
+            selected_bboxes[class_ind] = tf.stack([ymin, xmin, ymax, xmax], axis=-1)
+
+            # execute nms to get the final boxes
+            selected_scores[class_ind], selected_bboxes[class_ind] = nms_bboxes(selected_scores[class_ind], selected_bboxes[class_ind], nms_topk, nms_threshold, 'nms_bboxes_{}'.format(class_ind))
+
+        return selected_bboxes, selected_scores
+
 global_anchor_info = dict()
 
 def input_pipeline(file_pattern='train-*', is_training=True, batch_size=FLAGS.batch_size):
@@ -305,6 +394,7 @@ def ssd_model_fn(features, labels, mode, params):
     loc_targets = tf.stack(loc_targets_list,axis=0)
     cls_targets = tf.stack(cls_targets_list,axis=0)
     match_scores = tf.stack(match_scores_list,axis=0)
+
     with tf.variable_scope(params['model_scope'], default_name=None, values=[features], reuse=tf.AUTO_REUSE):
         # get vgg16 net
         backbone = ssd_net.VGG16Backbone(params['data_format'])
@@ -335,10 +425,12 @@ def ssd_model_fn(features, labels, mode, params):
         with tf.control_dependencies([cls_pred, location_pred]):
             with tf.name_scope('post_forward'):
                 # bboxes_pred = decode_fn(location_pred)
-                # decode predictions
+
+                # decode predictions to a list which element has shape[(num_anchors_per_layer[0],4),(num_anchors_per_layer[1],4),...]
                 bboxes_pred = tf.map_fn(lambda _preds: decode_fn(_preds),
                                         tf.reshape(location_pred, [tf.shape(features)[0], -1, 4]),
                                         dtype=[tf.float32] * len(num_anchors_per_layer), back_prop=False)
+
                 bboxes_pred = [tf.reshape(preds, [-1, 4]) for preds in bboxes_pred]
                 bboxes_pred = tf.concat(bboxes_pred, axis=0)
 
@@ -347,6 +439,8 @@ def ssd_model_fn(features, labels, mode, params):
                 flaten_match_scores = tf.reshape(match_scores, [-1])
                 flaten_loc_targets = tf.reshape(loc_targets, [-1, 4])
 
+                # hard negative mining for claculate loss
+
                 # each positive examples has one label
                 # find all positive anchors
                 positive_mask = flaten_cls_targets > 0
@@ -354,6 +448,7 @@ def ssd_model_fn(features, labels, mode, params):
 
                 # batch_n_positives：（batch,num_anchors） ?? cls_targets: -1 indicate ignore; 0 indicate background ;else
                 batch_n_positives = tf.count_nonzero(cls_targets, -1)
+                tf.identity(batch_n_positives[0],name="num_positives")
 
                 # tf.logical_and(tf.equal(cls_targets, 0), match_scores > 0.)
                 batch_negtive_mask = tf.equal(cls_targets,0)
@@ -363,6 +458,7 @@ def ssd_model_fn(features, labels, mode, params):
                 batch_n_neg_select = tf.cast(params['negative_ratio'] * tf.cast(batch_n_positives, tf.float32),
                                              tf.int32)
                 batch_n_neg_select = tf.minimum(batch_n_neg_select, tf.cast(batch_n_negtives, tf.int32))
+                tf.identity(batch_n_positives[0], name="num_negatives_select")
 
                 # hard negative mining for classification
                 predictions_for_bg = tf.nn.softmax(
@@ -434,16 +530,34 @@ def ssd_model_fn(features, labels, mode, params):
                 l2_loss_vars.append(tf.nn.l2_loss(trainable_var))
             else:
                 l2_loss_vars.append(tf.nn.l2_loss(trainable_var) * 0.1)
+
     # Add weight decay to the loss. We exclude the batch norm variables because
     # doing so leads to a small improvement in accuracy.
+    l2_loss = tf.multiply(params['weight_decay'], tf.add_n(l2_loss_vars), name='l2_loss')
 
     # construct total loss
-    total_loss = tf.add(cross_entropy + loc_loss,
-                        tf.multiply(params['weight_decay'], tf.add_n(l2_loss_vars), name='l2_loss'), name='total_loss')
+    total_loss = tf.add(cross_entropy + loc_loss,l2_loss, name='total_loss')
+
+    if mode == tf.estimator.ModeKeys.EVAL:
+        # add metrics, execute none maximum suppression
+        post_process_for_signle_example = lambda cls_pred, bboxes_pred: post_process(cls_pred, bboxes_pred,
+                                                          params['num_classes'], params['select_threshold'],
+                                                          params['min_size'],
+                                                          params['keep_topk'], params['nms_topk'], params['nms_threshold'])
+
+        cls_pred_list,bboxes_pred_list = tf.unstack(cls_pred),tf.unstack(bboxes_pred)
+        selected_bboxes_list, selected_scores_list = [],[]
+        for cls_pred, bboxes_pred in zip(cls_pred_list,bboxes_pred_list):
+            # post_process func only proceess one image once a time
+            selected_bboxes, selected_scores = post_process_for_signle_example(cls_pred, bboxes_pred)
+            selected_bboxes_list.append(selected_bboxes)
+            selected_scores_list.append(selected_scores)
+
+        # calculate metrics
+
 
 
     if mode == tf.estimator.ModeKeys.TRAIN:
-
         global_step = tf.train.get_or_create_global_step()
         # dynamic learning rate
         lr_values = [params['learning_rate'] * decay for decay in params['lr_decay_factors']]

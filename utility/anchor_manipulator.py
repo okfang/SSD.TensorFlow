@@ -218,14 +218,15 @@ class AnchorEncoder(object):
     #   order: ymin, xmin, ymax, xmax
     def decode_all_anchors(self, pred_location, all_anchors,num_anchors_per_layer):
         with tf.name_scope('decode_all_anchors', [pred_location]):
-            # *******************************************1.读取default anchors的坐标
+            # get from center format anchors
             anchor_cy, anchor_cx, anchor_h, anchor_w = all_anchors
-            # *******************************************2.将预测的边框偏移转化为中心坐标
+            
+            # change predict offset to coordinate
             pred_h = tf.exp(pred_location[:, -2] * self._prior_scaling[2]) * anchor_h
             pred_w = tf.exp(pred_location[:, -1] * self._prior_scaling[3]) * anchor_w
             pred_cy = pred_location[:, 0] * self._prior_scaling[0] * anchor_h + anchor_cy
             pred_cx = pred_location[:, 1] * self._prior_scaling[1] * anchor_w + anchor_cx
-            # ******************************************3.将中心坐标转化为（ymin,xmin,ymax,xmax）并转化为ymin_list列表
+            # return point anchor list:shape organize by num_anchors_per_layer
             return tf.split(tf.stack(center2point(pred_cy, pred_cx, pred_h, pred_w), axis=-1), num_anchors_per_layer, axis=0)
 
     def ext_decode_all_anchors(self, pred_location, all_anchors, all_num_anchors_depth, all_num_anchors_spatial):
