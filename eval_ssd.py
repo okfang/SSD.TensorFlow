@@ -124,6 +124,7 @@ global_anchor_info = dict()
 def input_pipeline(dataset_pattern='train-*', is_training=True, batch_size=FLAGS.batch_size):
     def input_fn():
         out_shape = [FLAGS.train_image_size] * 2
+        # 该方法耦合性太强，无法适应不同尺寸的图像。
         anchor_creator = anchor_manipulator.AnchorCreator(out_shape,
                                                     layers_shapes = [(38, 38), (19, 19), (10, 10), (5, 5), (3, 3), (1, 1)],
                                                     anchor_scales = [(0.1,), (0.2,), (0.375,), (0.55,), (0.725,), (0.9,)],

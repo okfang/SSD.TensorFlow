@@ -175,39 +175,32 @@ global_anchor_info = dict()
 
 def input_pipeline(file_pattern='train-*', is_training=True, batch_size=FLAGS.batch_size):
     def input_fn(params=None):
+        out_shape = [FLAGS.train_image_size] * 2
+        anchor_creator = anchor_manipulator.AnchorCreator(out_shape,
+                                                          layers_shapes=[(38, 38), (19, 19), (10, 10), (5, 5),
+                                                                         (3, 3),
+                                                                         (1, 1)],
+                                                          anchor_scales=[(0.1,), (0.2,), (0.375,), (0.55,),
+                                                                         (0.725,),
+                                                                         (0.9,)],
+                                                          extra_anchor_scales=[(0.1414,), (0.2739,), (0.4541,),
+                                                                               (0.6315,), (0.8078,), (0.9836,)],
+                                                          anchor_ratios=[(1., 2., .5), (1., 2., 3., .5, 0.3333),
+                                                                         (1., 2., 3., .5, 0.3333),
+                                                                         (1., 2., 3., .5, 0.3333), (1., 2., .5),
+                                                                         (1., 2., .5)],
+                                                          layer_steps=[8, 16, 32, 64, 100, 300],)
+        all_anchors, all_num_anchors_depth, all_num_anchors_spatial = anchor_creator.get_all_anchors()
+        global global_anchor_info
+        global_anchor_info["all_anchors"] = all_anchors
+        global_anchor_info["all_num_anchors_depth"] =  all_num_anchors_depth
+        global_anchor_info["all_num_anchors_spatial"] =  all_num_anchors_spatial
 
-        # *******************************************如果是训练过程，由于训练图片的大小一致，可以体现生成anchors并存储
-        if is_training:
-            out_shape = [FLAGS.train_image_size] * 2
-            anchor_creator = anchor_manipulator.AnchorCreator(out_shape,
-                                                              layers_shapes=[(38, 38), (19, 19), (10, 10), (5, 5),
-                                                                             (3, 3),
-                                                                             (1, 1)],
-                                                              anchor_scales=[(0.1,), (0.2,), (0.375,), (0.55,),
-                                                                             (0.725,),
-                                                                             (0.9,)],
-                                                              extra_anchor_scales=[(0.1414,), (0.2739,), (0.4541,),
-                                                                                   (0.6315,), (0.8078,), (0.9836,)],
-                                                              anchor_ratios=[(1., 2., .5), (1., 2., 3., .5, 0.3333),
-                                                                             (1., 2., 3., .5, 0.3333),
-                                                                             (1., 2., 3., .5, 0.3333), (1., 2., .5),
-                                                                             (1., 2., .5)],
-                                                              layer_steps=[8, 16, 32, 64, 100, 300],)
-
-            all_anchors, all_num_anchors_depth, all_num_anchors_spatial = anchor_creator.get_all_anchors()
-            global global_anchor_info
-            global_anchor_info["all_anchors"] = all_anchors
-            global_anchor_info["all_num_anchors_depth"] =  all_num_anchors_depth
-            global_anchor_info["all_num_anchors_spatial"] =  all_num_anchors_spatial
-
-        # *************************************************6.定义模型的预处理方法：可以根据是否训练进行不同的处理
         image_preprocessing_fn = lambda image_, labels_, bboxes_: ssd_preprocessing.preprocess_image(image_, labels_,
                                                                                                      bboxes_, out_shape,
                                                                                                      is_training=is_training,
                                                                                                      data_format=FLAGS.data_format,
                                                                                                      output_rgb=False)
-        # **************************************************10.为model_fn构建features和labels
-        # 为了使用MirroredStrategy.需要返回dataset
         dataset = get_dataset(file_pattern=file_pattern, is_training=True, batch_size=batch_size,
                               image_preprocessing_fn=image_preprocessing_fn)
         return dataset
@@ -273,18 +266,19 @@ def ssd_model_fn(features, labels, mode, params):
     glabels = labels['glabels']
     gbboxes = labels['gbboxes']
 
-    # *********************1.将glabel和gbboxes unpading成原来groundtruth_num_boxes数量
+    # unpadding  num_boxes dimension for real num_groundtruth_boxes
     glabels_list = unpad_tensor(glabels,num_groundtruth_boxes)
     gbboxes_list = unpad_tensor(gbboxes,num_groundtruth_boxes)
 
-    # 训练时，anchors只生成一次
-    out_shape = [FLAGS.train_image_size] * 2
+    #  generate anchors
+    #  resize anchors can be totally revert by the proportion of resized image and original image
+    # ,so there is no need to generate different anchors for different process
     global global_anchor_info
     all_anchors = global_anchor_info["all_anchors"]
     all_num_anchors_depth = global_anchor_info["all_num_anchors_depth"]
     all_num_anchors_spatial = global_anchor_info["all_num_anchors_spatial"]
 
-    # 计算每个feature layer包含的anchors数量
+    # calculate the number of anchors in each feature layer.
     num_anchors_per_layer = [depth*spatial for depth,spatial in
                              zip(all_num_anchors_depth,all_num_anchors_spatial)]
 
@@ -292,19 +286,18 @@ def ssd_model_fn(features, labels, mode, params):
                                                               ignore_threshold=FLAGS.neg_threshold,
                                                               prior_scaling=[0.1, 0.1, 0.2, 0.2],
                                                               allowed_borders=[1.0] * 6)
-    # *****************根据图片大小，分别生成中心坐标格式的anchors(x,y,h,w)以及四点坐标格式的anchors（ymin,xmin,）
-    # ****************7.将anchor和gtbox编码成（ymin,xmin,ymax,xmax）的格式
+    # encode function for anchors: assign labels by the iou matrics
     anchor_encoder_fn = lambda glabels_, gbboxes_: anchor_encoder_decoder.encode_all_anchors(glabels_, gbboxes_,
                                                                                              all_anchors,
                                                                                              all_num_anchors_depth,
                                                                                              all_num_anchors_spatial)
 
-    # ***************8.获取解码函数，将预测结果解码为边框
+    # decode function for anchors: convert the prediction to anchor coordinate
     decode_fn = lambda pred: anchor_encoder_decoder.decode_all_anchors(pred, all_anchors,num_anchors_per_layer)
 
-    # *************************************生成训练样本
+    # use "anchor_encoder_fn" to calculate the true labels:
     loc_targets_list, cls_targets_list, match_scores_list = [], [], []
-    for glabel,gbbox in zip(glabels_list,gbboxes_list):
+    for glabel, gbbox in zip(glabels_list,gbboxes_list):
         loc_target,cls_target,match_score = anchor_encoder_fn(glabel, gbbox)
         loc_targets_list.append(loc_target)
         cls_targets_list.append(cls_target)
@@ -312,44 +305,29 @@ def ssd_model_fn(features, labels, mode, params):
     loc_targets = tf.stack(loc_targets_list,axis=0)
     cls_targets = tf.stack(cls_targets_list,axis=0)
     match_scores = tf.stack(match_scores_list,axis=0)
-
-
-    # bboxes_pred = decode_fn(loc_targets[0])
-    # bboxes_pred = [tf.reshape(preds, [-1, 4]) for preds in bboxes_pred]
-    # bboxes_pred = tf.concat(bboxes_pred, axis=0)
-    # save_image_op = tf.py_func(save_image_with_bbox,
-    #                         [ssd_preprocessing.unwhiten_image(features[0]),
-    #                         tf.clip_by_value(cls_targets[0], 0, tf.int64.max),
-    #                         match_scores[0],
-    #                         bboxes_pred],
-    #                         tf.int64, stateful=True)
-    # with tf.control_dependencies([save_image_op]):
-
-    # print(all_num_anchors_depth)
     with tf.variable_scope(params['model_scope'], default_name=None, values=[features], reuse=tf.AUTO_REUSE):
-        # **************************************************1.获取模型基本框架类
+        # get vgg16 net
         backbone = ssd_net.VGG16Backbone(params['data_format'])
-        # **************************************************2.获取feature_map
-        # print("************************************打印features:",features.graph)
+
+        # calculate the feature layers and return
         feature_layers = backbone.forward(features, training=(mode == tf.estimator.ModeKeys.TRAIN))
-        # **************************************************3.使用feature map进行预测，得到预测框和类别
-        # location_pred:feature_map_layer的预测列表，[(batch,feature_map_shape[0],feature_map_shape[1],anchor_per_layer_depth*4)]
+
+        # execute prediction, and the prediction organized like:
+        # [(batch,feature_map_shape[0],feature_map_shape[1],anchor_per_layer_depth*4)]
         location_pred, cls_pred = ssd_net.multibox_head(feature_layers, params['num_classes'], all_num_anchors_depth,
                                                         data_format=params['data_format'])
 
-        # **************************************************4.如果使用channels_first，需要将结果翻转回来
+        # whether using "channels_first", can accelerate calculation
         if params['data_format'] == 'channels_first':
             cls_pred = [tf.transpose(pred, [0, 2, 3, 1]) for pred in cls_pred]
             location_pred = [tf.transpose(pred, [0, 2, 3, 1]) for pred in location_pred]
 
-        # *************************************************5.将预测结构reshape为：（batch,num_anchors,num_classes）
+        # flatten tensor
         cls_pred = [tf.reshape(pred, [tf.shape(features)[0], -1, params['num_classes']]) for pred in cls_pred]
         location_pred = [tf.reshape(pred, [tf.shape(features)[0], -1, 4]) for pred in location_pred]
-        # (batch,num_anchors,4)  (batch,num_anchors,num_classes)
+        # final shape: (batch,num_anchors,4)  (batch,num_anchors,num_classes)
         cls_pred = tf.concat(cls_pred, axis=1)
         location_pred = tf.concat(location_pred, axis=1)
-
-        # ************************************************6.将所有预测结果平铺下来(去掉batch维度)
         cls_pred = tf.reshape(cls_pred, [-1, params['num_classes']])
         location_pred = tf.reshape(location_pred, [-1, 4])
 
@@ -357,110 +335,98 @@ def ssd_model_fn(features, labels, mode, params):
         with tf.control_dependencies([cls_pred, location_pred]):
             with tf.name_scope('post_forward'):
                 # bboxes_pred = decode_fn(location_pred)
-                # ***************************************7.将预测结果解码，得到（ymin,xmin,ymax,ymin）格式坐标
-                # 这里又将平铺的location_pred转为（batch，...，4）
-                # 需要注意：训练时可以batch，验证时只能一张图片（验证时可以不用裁剪图片）
-                # 这里预测的boxes_pred是以feature_layer来组织，
-                # print("****************************打印location_pred：",location_pred.graph)
+                # decode predictions
                 bboxes_pred = tf.map_fn(lambda _preds: decode_fn(_preds),
                                         tf.reshape(location_pred, [tf.shape(features)[0], -1, 4]),
                                         dtype=[tf.float32] * len(num_anchors_per_layer), back_prop=False)
-                # cls_targets = tf.Print(cls_targets, [tf.shape(bboxes_pred[0]),tf.shape(bboxes_pred[1]),tf.shape(bboxes_pred[2]),tf.shape(bboxes_pred[3])])
-                # ***************************************8.reshape成（batch*num_anchors,4）
                 bboxes_pred = [tf.reshape(preds, [-1, 4]) for preds in bboxes_pred]
                 bboxes_pred = tf.concat(bboxes_pred, axis=0)
-                # *****************************************9.将样本gound_turth也平铺（去掉batch维度）
+
+                # flaten for calculate accuracy
                 flaten_cls_targets = tf.reshape(cls_targets, [-1])
                 flaten_match_scores = tf.reshape(match_scores, [-1])
                 flaten_loc_targets = tf.reshape(loc_targets, [-1, 4])
 
                 # each positive examples has one label
-                # *******************************************10.找到所有的正样本
+                # find all positive anchors
                 positive_mask = flaten_cls_targets > 0
                 n_positives = tf.count_nonzero(positive_mask)
-                # *******************************************11.计算正负样本的数目，为了做hard negative mining
-                # batch_n_positives：（batch,num_anchors）  ignore -1??这里应该有误，应该是只计算为1的正样本个数
+
+                # batch_n_positives：（batch,num_anchors） ?? cls_targets: -1 indicate ignore; 0 indicate background ;else
                 batch_n_positives = tf.count_nonzero(cls_targets, -1)
 
                 # tf.logical_and(tf.equal(cls_targets, 0), match_scores > 0.)
                 batch_negtive_mask = tf.equal(cls_targets,0)
                 batch_n_negtives = tf.count_nonzero(batch_negtive_mask, -1)
-                # ******************************************12.根据negative_ratio计算需要保留的负样本个数
+
+                # number of negative anchors should be retained
                 batch_n_neg_select = tf.cast(params['negative_ratio'] * tf.cast(batch_n_positives, tf.float32),
                                              tf.int32)
                 batch_n_neg_select = tf.minimum(batch_n_neg_select, tf.cast(batch_n_negtives, tf.int32))
 
                 # hard negative mining for classification
-                # ****************************************13.进行softmax计算，得到背景类的概率
-                # 每个step训练都要重新选择样本吗？这里用到了cls_pred
                 predictions_for_bg = tf.nn.softmax(
                     tf.reshape(cls_pred, [tf.shape(features)[0], -1, params['num_classes']]))[:, :, 0]
-                # *****************************************14.这里貌似有问题。背景类预测越大，应该是负样本
                 prob_for_negtives = tf.where(batch_negtive_mask,
                                              0. - predictions_for_bg,
                                              # ignore all the positives
                                              0. - tf.ones_like(predictions_for_bg))
-                # *********************************************15.定位背景类概率最高的k个负样本（下标）
+
+                # choose top k negatives, which has high probability to be background
                 topk_prob_for_bg, _ = tf.nn.top_k(prob_for_negtives, k=tf.shape(prob_for_negtives)[1])
-                # *********************************************使用gather_nd获取第k大negative的值
-                # （batch,num_samples）
+
+                # shape:（batch,num_samples）
                 score_at_k = tf.gather_nd(topk_prob_for_bg,
                                           tf.stack([tf.range(tf.shape(features)[0]), batch_n_neg_select - 1], axis=-1))
-                # 这里才找到每个batch的negative样本
                 selected_neg_mask = prob_for_negtives >= tf.expand_dims(score_at_k, axis=-1)
 
                 # include both selected negtive and all positive examples
-                # ********************************************16.对那些非正样本和非负样本，不纳入loss的计算
-                #这里找到所有参与计算loss的anchors
                 final_mask = tf.stop_gradient(
                     tf.logical_or(tf.reshape(tf.logical_and(batch_negtive_mask, selected_neg_mask), [-1]),
                                   positive_mask))
                 total_examples = tf.count_nonzero(final_mask)
-                # 这里找到所有参与计算loss的anchors
-                # (all_anchors,)
+
+                # tensors used in loss calculation
                 cls_pred = tf.boolean_mask(cls_pred, final_mask)
                 location_pred = tf.boolean_mask(location_pred, tf.stop_gradient(positive_mask))
                 flaten_cls_targets = tf.boolean_mask(tf.clip_by_value(flaten_cls_targets, 0, params['num_classes']),
                                                      final_mask)
                 flaten_loc_targets = tf.stop_gradient(tf.boolean_mask(flaten_loc_targets, positive_mask))
-                # ********************************************17.得到预测结果：这里预测结果的格式也没有对齐
+
+                # bboxes_pred: indicate all the predict boxes，should als0 be selected
                 predictions = {
-                    'classes': tf.argmax(cls_pred, axis=-1),#这里是部分参与训练的anchors
+                    'classes': tf.argmax(cls_pred, axis=-1),
                     'probabilities': tf.reduce_max(tf.nn.softmax(cls_pred, name='softmax_tensor'), axis=-1),
-                    'loc_predict': bboxes_pred}#这里是所有anchors，应该也进行boolean mask
-                #*********************************************18. 计算分类的准确率
+                    'loc_predict': bboxes_pred}
                 cls_accuracy = tf.metrics.accuracy(flaten_cls_targets, predictions['classes'])
                 metrics = {'cls_accuracy': cls_accuracy}
 
                 # Create a tensor named train_accuracy for logging purposes.
                 tf.identity(cls_accuracy[1], name='cls_accuracy')
                 tf.summary.scalar('cls_accuracy', cls_accuracy[1])
-    # ******************************************************19.构造预测时的输出
+
     if mode == tf.estimator.ModeKeys.PREDICT:
         return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
 
     # Calculate loss, which includes softmax cross entropy and L2 regularization.
     # cross_entropy = tf.cond(n_positives > 0, lambda: tf.losses.sparse_softmax_cross_entropy(labels=flaten_cls_targets, logits=cls_pred), lambda: 0.)# * (params['negative_ratio'] + 1.)
     # flaten_cls_targets=tf.Print(flaten_cls_targets, [flaten_loc_targets],summarize=50000)
-    # *****************************************************20.训练时计算loss
-    # 交叉熵
     cross_entropy = tf.losses.sparse_softmax_cross_entropy(labels=flaten_cls_targets, logits=cls_pred) * (
                 params['negative_ratio'] + 1.)
 
     # Create a tensor named cross_entropy for logging purposes.
-    # identity是为了创建一个tensor,为了后续的日志记录
     tf.identity(cross_entropy, name='cross_entropy_loss')
     tf.summary.scalar('cross_entropy_loss', cross_entropy)
 
     # loc_loss = tf.cond(n_positives > 0, lambda: modified_smooth_l1(location_pred, tf.stop_gradient(flaten_loc_targets), sigma=1.), lambda: tf.zeros_like(location_pred))
-    # 边框回归loss
     loc_loss = modified_smooth_l1(location_pred, flaten_loc_targets, sigma=1.)
+
     # loc_loss = modified_smooth_l1(location_pred, tf.stop_gradient(gtargets))
     loc_loss = tf.reduce_mean(tf.reduce_sum(loc_loss, axis=-1), name='location_loss')
     tf.summary.scalar('location_loss', loc_loss)
     tf.losses.add_loss(loc_loss)
 
-    # ***************************************************21.进行正则化约束（除去了bn层）
+    # loss for regularization
     l2_loss_vars = []
     for trainable_var in tf.trainable_variables():
         if '_bn' not in trainable_var.name:
@@ -471,39 +437,37 @@ def ssd_model_fn(features, labels, mode, params):
     # Add weight decay to the loss. We exclude the batch norm variables because
     # doing so leads to a small improvement in accuracy.
 
-    # *************************************************22.统计所有的loss,正则化loss需要加入参数
+    # construct total loss
     total_loss = tf.add(cross_entropy + loc_loss,
                         tf.multiply(params['weight_decay'], tf.add_n(l2_loss_vars), name='l2_loss'), name='total_loss')
 
-    # *************************************************23.进行训练。
+
     if mode == tf.estimator.ModeKeys.TRAIN:
-        # ******************************************************24.获取global_step（训练的基本单位是step）
+
         global_step = tf.train.get_or_create_global_step()
-        # ******************************************************25.根据global_step选择学习率
+        # dynamic learning rate
         lr_values = [params['learning_rate'] * decay for decay in params['lr_decay_factors']]
         learning_rate = tf.train.piecewise_constant(tf.cast(global_step, tf.int32),
                                                     [int(_) for _ in params['decay_boundaries']],
                                                     lr_values)
-        # *****************************************************26.对学习率进行截断：防止学习率过大
+
         truncated_learning_rate = tf.maximum(learning_rate,
                                              tf.constant(params['end_learning_rate'], dtype=learning_rate.dtype),
                                              name='learning_rate')
         # Create a tensor named learning_rate for logging purposes.
         tf.summary.scalar('learning_rate', truncated_learning_rate)
-        # ****************************************************27.设置优化器
+
         optimizer = tf.train.MomentumOptimizer(learning_rate=truncated_learning_rate,
                                                momentum=params['momentum'])
         # optimizer = tf.contrib.estimator.TowerOptimizer(optimizer)
 
         # Batch norm requires update_ops to be added as a train_op dependency.
-        # 需要注意，batch normal涉及到更新每一层的feature maps
-        # ****************************************************28.注意依赖，防止最后进行优化时，用了没有更新的参数
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
         with tf.control_dependencies(update_ops):
             train_op = optimizer.minimize(total_loss, global_step)
     else:
         train_op = None
-    # *******************************************************29.返回训练用的estimator实例
+
     return tf.estimator.EstimatorSpec(
         mode=mode,
         predictions=predictions,
@@ -519,11 +483,11 @@ def parse_comma_list(args):
 
 def main(_):
     # Using the Winograd non-fused algorithms provides a small performance boost.
-    # **************************************************************1.进行硬件相关配置
+    # gpu config
     os.environ['TF_ENABLE_WINOGRAD_NONFUSED'] = '1'
-
     gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=FLAGS.gpu_memory_fraction)
-    # *************************************************************2.配置多GPU训练
+
+    # multi gpu training strategy
     strategy = tf.contrib.distribute.MirroredStrategy(num_gpus=2)
     config = tf.ConfigProto(allow_soft_placement=True,
                             log_device_placement=False,
@@ -534,7 +498,6 @@ def main(_):
     # num_gpus = validate_batch_size_for_multi_gpu(FLAGS.batch_size)
 
     # Set up a RunConfig to only save checkpoints once per training cycle.
-    # *****************************************************************3.配置estimator
     run_config = tf.estimator.RunConfig().replace(
         save_checkpoints_secs=FLAGS.save_checkpoints_secs).replace(
         save_checkpoints_steps=None).replace(
@@ -543,11 +506,9 @@ def main(_):
         tf_random_seed=FLAGS.tf_random_seed).replace(
         log_step_count_steps=FLAGS.log_every_n_steps).replace(
         session_config=config).replace(
-        # 添加gpu训练策略
         train_distribute=strategy)
 
     # replicate_ssd_model_fn = tf.contrib.estimator.replicate_model_fn(ssd_model_fn, loss_reduction=tf.losses.Reduction.MEAN)
-    # ********************************************************************4.构建estimator
     ssd_detector = tf.estimator.Estimator(
         model_fn=ssd_model_fn, model_dir=FLAGS.model_dir, config=run_config,
         params={
@@ -566,7 +527,7 @@ def main(_):
             'decay_boundaries': parse_comma_list(FLAGS.decay_boundaries),
             'lr_decay_factors': parse_comma_list(FLAGS.lr_decay_factors),
         })
-    # **********************************************************5.定义需要监控的tensor
+    # log tensor
     tensors_to_log = {
         'lr': 'learning_rate',
         'ce': 'cross_entropy_loss',
@@ -575,7 +536,7 @@ def main(_):
         'l2': 'l2_loss',
         'acc': 'post_forward/cls_accuracy',
     }
-    # ********************************************************6.构造监控用的hook,用于接入训练的运行时环境
+    # loggging hook：define how to log
     logging_hook = tf.train.LoggingTensorHook(tensors=tensors_to_log, every_n_iter=FLAGS.log_every_n_steps,
                                               formatter=lambda dicts: (
                                                   ', '.join(['%s=%.6f' % (k, v) for k, v in dicts.items()])))
