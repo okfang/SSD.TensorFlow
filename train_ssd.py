@@ -23,8 +23,9 @@ import os
 # sys.path.insert(0,abspath(dirname(__file__)))
 
 import tensorflow as tf
+import functools
 
-from dataset.dataset_util import get_dataset
+from dataset.dataset_helper import get_dataset
 from net import ssd_net
 
 from dataset import dataset_common
@@ -174,10 +175,10 @@ global_anchor_info = dict()
 
 def input_pipeline(file_pattern='train-*', is_training=True, batch_size=FLAGS.batch_size):
     def input_fn(params=None):
-        # ****************************************************1.规定训练时图片尺寸的要求（300*300）
-        out_shape = [FLAGS.train_image_size] * 2
+
         # *******************************************如果是训练过程，由于训练图片的大小一致，可以体现生成anchors并存储
         if is_training:
+            out_shape = [FLAGS.train_image_size] * 2
             anchor_creator = anchor_manipulator.AnchorCreator(out_shape,
                                                               layers_shapes=[(38, 38), (19, 19), (10, 10), (5, 5),
                                                                              (3, 3),
@@ -191,7 +192,7 @@ def input_pipeline(file_pattern='train-*', is_training=True, batch_size=FLAGS.ba
                                                                              (1., 2., 3., .5, 0.3333),
                                                                              (1., 2., 3., .5, 0.3333), (1., 2., .5),
                                                                              (1., 2., .5)],
-                                                              layer_steps=[8, 16, 32, 64, 100, 300])
+                                                              layer_steps=[8, 16, 32, 64, 100, 300],)
 
             all_anchors, all_num_anchors_depth, all_num_anchors_spatial = anchor_creator.get_all_anchors()
             global global_anchor_info
@@ -276,22 +277,21 @@ def ssd_model_fn(features, labels, mode, params):
     glabels_list = unpad_tensor(glabels,num_groundtruth_boxes)
     gbboxes_list = unpad_tensor(gbboxes,num_groundtruth_boxes)
 
-    # -------------------------------------进行数据处理，生成训练样本---------------------------------
-    # *********************1.规定训练时图片尺寸的要求（300*300）
+    # 训练时，anchors只生成一次
     out_shape = [FLAGS.train_image_size] * 2
+    global global_anchor_info
+    all_anchors = global_anchor_info["all_anchors"]
+    all_num_anchors_depth = global_anchor_info["all_num_anchors_depth"]
+    all_num_anchors_spatial = global_anchor_info["all_num_anchors_spatial"]
 
-    # ******************4.计算每层的anchor数量
-    num_anchors_per_layer = []
-    for ind in range(len(all_anchors)):
-        num_anchors_per_layer.append(
-            all_num_anchors_depth[ind] * all_num_anchors_spatial[ind])  # feature map大小以及每个位置的anchor数量
+    # 计算每个feature layer包含的anchors数量
+    num_anchors_per_layer = [depth*spatial for depth,spatial in
+                             zip(all_num_anchors_depth,all_num_anchors_spatial)]
 
-    # ****************5.构建anchor处理类：主要完成anchor坐标的转化
-    anchor_encoder_decoder = anchor_manipulator.AnchorEncoder(allowed_borders=[1.0] * 6,
-                                                              positive_threshold=FLAGS.match_threshold,
+    anchor_encoder_decoder = anchor_manipulator.AnchorEncoder(positive_threshold=FLAGS.match_threshold,
                                                               ignore_threshold=FLAGS.neg_threshold,
-                                                              prior_scaling=[0.1, 0.1, 0.2, 0.2])
-
+                                                              prior_scaling=[0.1, 0.1, 0.2, 0.2],
+                                                              allowed_borders=[1.0] * 6)
     # *****************根据图片大小，分别生成中心坐标格式的anchors(x,y,h,w)以及四点坐标格式的anchors（ymin,xmin,）
     # ****************7.将anchor和gtbox编码成（ymin,xmin,ymax,xmax）的格式
     anchor_encoder_fn = lambda glabels_, gbboxes_: anchor_encoder_decoder.encode_all_anchors(glabels_, gbboxes_,
@@ -300,12 +300,9 @@ def ssd_model_fn(features, labels, mode, params):
                                                                                              all_num_anchors_spatial)
 
     # ***************8.获取解码函数，将预测结果解码为边框
-    decode_fn = lambda pred: anchor_encoder_decoder.decode_all_anchors(pred, num_anchors_per_layer)
-    num_anchors_per_layer = num_anchors_per_layer
-    all_num_anchors_depth = all_num_anchors_depth
+    decode_fn = lambda pred: anchor_encoder_decoder.decode_all_anchors(pred, all_anchors,num_anchors_per_layer)
 
-
-    # 生成训练样本
+    # *************************************生成训练样本
     loc_targets_list, cls_targets_list, match_scores_list = [], [], []
     for glabel,gbbox in zip(glabels_list,gbboxes_list):
         loc_target,cls_target,match_score = anchor_encoder_fn(glabel, gbbox)
@@ -385,9 +382,8 @@ def ssd_model_fn(features, labels, mode, params):
                 # batch_n_positives：（batch,num_anchors）  ignore -1??这里应该有误，应该是只计算为1的正样本个数
                 batch_n_positives = tf.count_nonzero(cls_targets, -1)
 
-                batch_negtive_mask = tf.equal(cls_targets,
-                                              0)  # tf.logical_and(tf.equal(cls_targets, 0), match_scores > 0.)
-                # print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~打印batch_negtive_mask：",batch_negtive_mask)
+                # tf.logical_and(tf.equal(cls_targets, 0), match_scores > 0.)
+                batch_negtive_mask = tf.equal(cls_targets,0)
                 batch_n_negtives = tf.count_nonzero(batch_negtive_mask, -1)
                 # ******************************************12.根据negative_ratio计算需要保留的负样本个数
                 batch_n_neg_select = tf.cast(params['negative_ratio'] * tf.cast(batch_n_positives, tf.float32),

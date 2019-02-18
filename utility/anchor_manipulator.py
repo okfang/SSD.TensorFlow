@@ -117,6 +117,13 @@ def do_dual_max_match(overlap_matrix, low_thres, high_thres, ignore_between=True
 #     np.save('./debug/anchors_{}.npy'.format(save_image_with_bbox.counter), np.copy(anchors_point))
 #     return save_image_with_bbox.counter
 
+def center2point(center_y, center_x, height, width):
+    return center_y - height / 2., center_x - width / 2., center_y + height / 2., center_x + width / 2.,
+
+def point2center(ymin, xmin, ymax, xmax):
+    height, width = (ymax - ymin), (xmax - xmin)
+    return ymin + height / 2., xmin + width / 2., height, width
+
 class AnchorEncoder(object):
     def __init__(self, allowed_borders, positive_threshold, ignore_threshold, prior_scaling, clip=False):
         super(AnchorEncoder, self).__init__()
@@ -127,65 +134,16 @@ class AnchorEncoder(object):
         self._prior_scaling = prior_scaling
         self._clip = clip
 
-    def center2point(self, center_y, center_x, height, width):
-        return center_y - height / 2., center_x - width / 2., center_y + height / 2., center_x + width / 2.,
 
-    def point2center(self, ymin, xmin, ymax, xmax):
-        height, width = (ymax - ymin), (xmax - xmin)
-        return ymin + height / 2., xmin + width / 2., height, width
-
-    def encode_all_anchors(self, labels, bboxes, all_anchors, all_num_anchors_depth, all_num_anchors_spatial, debug=False):
+    def encode_all_anchors(self, labels, bboxes, all_anchors, all_num_anchors_depth, all_num_anchors_spatial,debug=False):
         # y, x, h, w are all in range [0, 1] relative to the original image size
         # shape info:
         # y_on_image, x_on_image: layers_shapes[0] * layers_shapes[1]
         # h_on_image, w_on_image: num_anchors
         # *****************************************************1.确保all_num_anchors_depth和all_num_anchors_spatial第1维是相同的
-        # all_anchors: ([],[])
-        assert (len(all_num_anchors_depth)==len(all_num_anchors_spatial)) and (len(all_num_anchors_depth)==len(all_anchors)), 'inconsist num layers for anchors.'
+        # all_anchors: [anchors_ymin, anchors_xmin, anchors_ymax, anchors_xmax]
+
         with tf.name_scope('encode_all_anchors'):
-            num_layers = len(all_num_anchors_depth)
-            list_anchors_ymin = []
-            list_anchors_xmin = []
-            list_anchors_ymax = []
-            list_anchors_xmax = []
-            tiled_allowed_borders = []
-            # *************************************************2.将所有anchor转化为（ymin,xmin,ymax,xmax）
-            for ind, anchor in enumerate(all_anchors):
-                # **********************************************3.这里注意:anchor[0]是一个矩阵，anchor[2]是1维向量
-                # h*w*1  1*num_scale可以broadcast为 h*w*num_scale
-                # anchor[0]:y_on_image  anchor[1]:x_on_image
-                anchors_ymin_, anchors_xmin_, anchors_ymax_, anchors_xmax_ = self.center2point(anchor[0], anchor[1], anchor[2], anchor[3])
-                # print("**********************************打印anchors_ymin_：",anchors_ymin_.graph)
-                # anchors_ymin_的形状为[(feature_shape[0]*feature_shape[1]*num_anchor_per_depth),...]
-                list_anchors_ymin.append(tf.reshape(anchors_ymin_, [-1]))
-                list_anchors_xmin.append(tf.reshape(anchors_xmin_, [-1]))
-                list_anchors_ymax.append(tf.reshape(anchors_ymax_, [-1]))
-                list_anchors_xmax.append(tf.reshape(anchors_xmax_, [-1]))
-                # 表示允许的边框范围 1*anchor_ratios*feature_map size  是每层feature map所有anchors的数量[1]*num_anchor_per_layer
-                tiled_allowed_borders.extend([self._allowed_borders[ind]] * all_num_anchors_depth[ind] * all_num_anchors_spatial[ind])
-            #一张图片所有anchor concat成一个列表
-            anchors_ymin = tf.concat(list_anchors_ymin, 0, name='concat_ymin')
-            anchors_xmin = tf.concat(list_anchors_xmin, 0, name='concat_xmin')
-            anchors_ymax = tf.concat(list_anchors_ymax, 0, name='concat_ymax')
-            anchors_xmax = tf.concat(list_anchors_xmax, 0, name='concat_xmax')
-
-            # ***********************************************4.注意将超越边界的坐标修剪,默认不进行修剪
-            if self._clip:
-                anchors_ymin = tf.clip_by_value(anchors_ymin, 0., 1.)
-                anchors_xmin = tf.clip_by_value(anchors_xmin, 0., 1.)
-                anchors_ymax = tf.clip_by_value(anchors_ymax, 0., 1.)
-                anchors_xmax = tf.clip_by_value(anchors_xmax, 0., 1.)
-            # 边框缓冲区为1（即1倍大小）
-            anchor_allowed_borders = tf.stack(tiled_allowed_borders, 0, name='concat_allowed_borders')
-            # ***********************************************5.？？？？找到四个边框都在图片内部的边框？？
-            inside_mask = tf.logical_and(tf.logical_and(anchors_ymin > -anchor_allowed_borders * 1.,
-                                                        anchors_xmin > -anchor_allowed_borders * 1.),
-                                        tf.logical_and(anchors_ymax < (1. + anchor_allowed_borders * 1.),
-                                                        anchors_xmax < (1. + anchor_allowed_borders * 1.)))
-
-            # ***********************************************6.得到所有坐标的tensor（有可能有负数的，坐标）
-            anchors_point = tf.stack([anchors_ymin, anchors_xmin, anchors_ymax, anchors_xmax], axis=-1)
-
             # save_anchors_op = tf.py_func(save_anchors,
             #                 [bboxes,
             #                 labels,
@@ -193,7 +151,19 @@ class AnchorEncoder(object):
             #                 tf.int64, stateful=True)
 
             # anchors_point：shape:（num_all_anchors,4）
-
+            anchors_ymin, anchors_xmin, anchors_ymax, anchors_xmax = center2point(all_anchors[0],all_anchors[1],all_anchors[2],all_anchors[3])
+            # ************************************************计算inside_mask
+            tiled_allowed_borders = []
+            for ind,_ in enumerate(self._allowed_borders):
+                tiled_allowed_borders.extend(
+                    [self._allowed_borders[ind]] * all_num_anchors_depth[ind] * all_num_anchors_spatial[ind])
+            anchor_allowed_borders = tf.stack(tiled_allowed_borders, 0, name='concat_allowed_borders')
+            inside_mask = tf.logical_and(tf.logical_and(anchors_ymin > -anchor_allowed_borders * 1.,
+                                                        anchors_xmin > -anchor_allowed_borders * 1.),
+                                         tf.logical_and(anchors_ymax < (1. + anchor_allowed_borders * 1.),
+                                                        anchors_xmax < (1. + anchor_allowed_borders * 1.)))
+            #
+            anchors_point = tf.stack([anchors_ymin, anchors_xmin, anchors_ymax, anchors_xmax], axis=-1)
             # with tf.control_dependencies([save_anchors_op]):
             # ***********************************************7.得到bboxes和所有anchor的iou矩阵(num_bboxes,num_anchors)
             overlap_matrix = iou_matrix(bboxes, anchors_point) * tf.cast(tf.expand_dims(inside_mask, 0), tf.float32)
@@ -221,8 +191,8 @@ class AnchorEncoder(object):
 
             # transform to center / size.
             # *******************************************12.把anchor和gt_boxes的坐标转化为中心坐标，并计算增量
-            gt_cy, gt_cx, gt_h, gt_w = self.point2center(gt_ymin, gt_xmin, gt_ymax, gt_xmax)
-            anchor_cy, anchor_cx, anchor_h, anchor_w = self.point2center(anchors_ymin, anchors_xmin, anchors_ymax, anchors_xmax)
+            gt_cy, gt_cx, gt_h, gt_w = point2center(gt_ymin, gt_xmin, gt_ymax, gt_xmax)
+            anchor_cy, anchor_cx, anchor_h, anchor_w = point2center(anchors_ymin, anchors_xmin, anchors_ymax, anchors_xmax)
             # print("*****************************打印anchor_h:", anchor_h.graph)
             # encode features.
             # the prior_scaling (in fact is 5 and 10) is use for balance the regression loss of center and with(or height)
@@ -240,28 +210,23 @@ class AnchorEncoder(object):
             # set all targets of non-positive positions to 0
             # *******************************************14.这里也将那些负anchors和忽略的anchor设置为0
             gt_targets = tf.expand_dims(tf.cast(matched_gt_mask, tf.float32), -1) * gt_targets
-            # *******************************************15.更新_all_anchors：将所有的anchor情况存储起来
-            # 需要注意：训练时，decode一个batch可以共用用同一组anchors,验证时只能单独一张图片，不然后面用于decode时不匹配
-            self._all_anchors = (anchor_cy, anchor_cx, anchor_h, anchor_w)
-            # all_anchors = (anchor_cy, anchor_cx, anchor_h, anchor_w)
             # ******************************************16.返回边框回归用的坐标和分类用的类别
             return gt_targets, gt_labels, gt_scores
 
     # return a list, of which each is:
     #   shape: [feature_h, feature_w, num_anchors, 4]
     #   order: ymin, xmin, ymax, xmax
-    def decode_all_anchors(self, pred_location, num_anchors_per_layer):
-        assert self._all_anchors is not None, 'no anchors to decode.'
+    def decode_all_anchors(self, pred_location, all_anchors,num_anchors_per_layer):
         with tf.name_scope('decode_all_anchors', [pred_location]):
             # *******************************************1.读取default anchors的坐标
-            anchor_cy, anchor_cx, anchor_h, anchor_w = self._all_anchors
+            anchor_cy, anchor_cx, anchor_h, anchor_w = all_anchors
             # *******************************************2.将预测的边框偏移转化为中心坐标
             pred_h = tf.exp(pred_location[:, -2] * self._prior_scaling[2]) * anchor_h
             pred_w = tf.exp(pred_location[:, -1] * self._prior_scaling[3]) * anchor_w
             pred_cy = pred_location[:, 0] * self._prior_scaling[0] * anchor_h + anchor_cy
             pred_cx = pred_location[:, 1] * self._prior_scaling[1] * anchor_w + anchor_cx
             # ******************************************3.将中心坐标转化为（ymin,xmin,ymax,xmax）并转化为ymin_list列表
-            return tf.split(tf.stack(self.center2point(pred_cy, pred_cx, pred_h, pred_w), axis=-1), num_anchors_per_layer, axis=0)
+            return tf.split(tf.stack(center2point(pred_cy, pred_cx, pred_h, pred_w), axis=-1), num_anchors_per_layer, axis=0)
 
     def ext_decode_all_anchors(self, pred_location, all_anchors, all_num_anchors_depth, all_num_anchors_spatial):
         assert (len(all_num_anchors_depth)==len(all_num_anchors_spatial)) and (len(all_num_anchors_depth)==len(all_anchors)), 'inconsist num layers for anchors.'
@@ -277,7 +242,7 @@ class AnchorEncoder(object):
             list_anchors_xmax = []
             tiled_allowed_borders = []
             for ind, anchor in enumerate(all_anchors):
-                anchors_ymin_, anchors_xmin_, anchors_ymax_, anchors_xmax_ = self.center2point(anchor[0], anchor[1], anchor[2], anchor[3])
+                anchors_ymin_, anchors_xmin_, anchors_ymax_, anchors_xmax_ = center2point(anchor[0], anchor[1], anchor[2], anchor[3])
 
                 list_anchors_ymin.append(tf.reshape(anchors_ymin_, [-1]))
                 list_anchors_xmin.append(tf.reshape(anchors_xmin_, [-1]))
@@ -289,17 +254,17 @@ class AnchorEncoder(object):
             anchors_ymax = tf.concat(list_anchors_ymax, 0, name='concat_ymax')
             anchors_xmax = tf.concat(list_anchors_xmax, 0, name='concat_xmax')
 
-            anchor_cy, anchor_cx, anchor_h, anchor_w = self.point2center(anchors_ymin, anchors_xmin, anchors_ymax, anchors_xmax)
+            anchor_cy, anchor_cx, anchor_h, anchor_w = point2center(anchors_ymin, anchors_xmin, anchors_ymax, anchors_xmax)
 
             pred_h = tf.exp(pred_location[:,-2] * self._prior_scaling[2]) * anchor_h
             pred_w = tf.exp(pred_location[:, -1] * self._prior_scaling[3]) * anchor_w
             pred_cy = pred_location[:, 0] * self._prior_scaling[0] * anchor_h + anchor_cy
             pred_cx = pred_location[:, 1] * self._prior_scaling[1] * anchor_w + anchor_cx
 
-            return tf.split(tf.stack(self.center2point(pred_cy, pred_cx, pred_h, pred_w), axis=-1), num_anchors_per_layer, axis=0)
+            return tf.split(tf.stack(center2point(pred_cy, pred_cx, pred_h, pred_w), axis=-1), num_anchors_per_layer, axis=0)
 
 class AnchorCreator(object):
-    def __init__(self, img_shape, layers_shapes, anchor_scales, extra_anchor_scales, anchor_ratios, layer_steps):
+    def __init__(self, img_shape, layers_shapes, anchor_scales, extra_anchor_scales, anchor_ratios, layer_steps,allowed_borders):
         super(AnchorCreator, self).__init__()
         # img_shape -> (height, width)
         self._img_shape = img_shape
@@ -309,6 +274,8 @@ class AnchorCreator(object):
         self._anchor_ratios = anchor_ratios
         self._layer_steps = layer_steps
         self._anchor_offset = [0.5] * len(self._layers_shapes)
+        self._allowed_borders=allowed_borders,
+        self._clip=False
 
     def get_layer_anchors(self, layer_shape, anchor_scale, extra_anchor_scale, anchor_ratio, layer_step, offset = 0.5):
         ''' assume layer_shape[0] = 6, layer_shape[1] = 5
@@ -364,6 +331,7 @@ class AnchorCreator(object):
                     tf.constant(list_w_on_image, dtype=tf.float32), num_anchors_along_depth, num_anchors_along_spatial
 
     def get_all_anchors(self):
+        # 生成anchors
         all_anchors = []
         all_num_anchors_depth = []
         all_num_anchors_spatial = []
@@ -375,10 +343,50 @@ class AnchorCreator(object):
                                                         self._anchor_ratios[layer_index],
                                                         self._layer_steps[layer_index],
                                                         self._anchor_offset[layer_index])
-            # print("************************打印anchors_this_layer：",anchors_this_layer[0].graph)
             all_anchors.append(anchors_this_layer[:-2])
             all_num_anchors_depth.append(anchors_this_layer[-2])
             all_num_anchors_spatial.append(anchors_this_layer[-1])
+        # 将anchors格式转化为（ymin,xmin,ymax,xmax）格式
+        assert (len(all_num_anchors_depth) == len(all_num_anchors_spatial)) and (
+                    len(all_num_anchors_depth) == len(all_anchors)), 'inconsist num layers for anchors.'
+        with tf.name_scope('create_all_anchors'):
+            num_layers = len(all_num_anchors_depth)
+            list_anchors_ymin = []
+            list_anchors_xmin = []
+            list_anchors_ymax = []
+            list_anchors_xmax = []
+            tiled_allowed_borders = []
+            # *************************************************2.将所有anchor转化为（ymin,xmin,ymax,xmax）
+            for ind, anchor in enumerate(all_anchors):
+                # **********************************************3.注意:anchor[0]是一个矩阵，anchor[2]是1维向量
+                # h*w*1  1*num_scale可以broadcast为 h*w*num_scale
+                # anchor[0]:y_on_image  anchor[1]:x_on_image
+                anchors_ymin_, anchors_xmin_, anchors_ymax_, anchors_xmax_ = center2point(anchor[0], anchor[1],
+                                                                                               anchor[2], anchor[3])
+                # print("**********************************打印anchors_ymin_：",anchors_ymin_.graph)
+                # anchors_ymin_的形状为[(feature_shape[0]*feature_shape[1]*num_anchor_per_depth),...]
+                list_anchors_ymin.append(tf.reshape(anchors_ymin_, [-1]))
+                list_anchors_xmin.append(tf.reshape(anchors_xmin_, [-1]))
+                list_anchors_ymax.append(tf.reshape(anchors_ymax_, [-1]))
+                list_anchors_xmax.append(tf.reshape(anchors_xmax_, [-1]))
+
+            # 一张图片所有anchor concat成一个列表
+            anchors_ymin = tf.concat(list_anchors_ymin, 0, name='concat_ymin')
+            anchors_xmin = tf.concat(list_anchors_xmin, 0, name='concat_xmin')
+            anchors_ymax = tf.concat(list_anchors_ymax, 0, name='concat_ymax')
+            anchors_xmax = tf.concat(list_anchors_xmax, 0, name='concat_xmax')
+
+            # ***********************************************4.注意将超越边界的坐标修剪,默认不进行修剪
+            if self._clip:
+                anchors_ymin = tf.clip_by_value(anchors_ymin, 0., 1.)
+                anchors_xmin = tf.clip_by_value(anchors_xmin, 0., 1.)
+                anchors_ymax = tf.clip_by_value(anchors_ymax, 0., 1.)
+                anchors_xmax = tf.clip_by_value(anchors_xmax, 0., 1.)
+            # ***********************************************6.得到所有坐标的tensor（有可能有负数的，坐标）
+            anchor_cy, anchor_cx, anchor_h, anchor_w = point2center(anchors_ymin, anchors_xmin, anchors_ymax,
+                                                                         anchors_xmax)
+            all_anchors = (anchor_cy, anchor_cx, anchor_h, anchor_w)
+
         # *********************************************2.返回所有anchors，每层feature_map的anchor都是一个4维张量
-        return all_anchors, all_num_anchors_depth, all_num_anchors_spatial
+        return all_anchors,all_num_anchors_depth, all_num_anchors_spatial
 
