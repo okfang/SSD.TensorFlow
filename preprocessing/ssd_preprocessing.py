@@ -465,6 +465,8 @@ def preprocess_for_train(image, labels, bboxes, out_shape, data_format='channels
     random_sample_flip_resized_image.set_shape([None, None, 3])
 
     final_image = tf.to_float(tf.image.convert_image_dtype(random_sample_flip_resized_image, orig_dtype, saturate=True))
+
+    # normalize image
     final_image = _mean_image_subtraction(final_image, [_R_MEAN, _G_MEAN, _B_MEAN])
 
     final_image.set_shape(out_shape + [3])

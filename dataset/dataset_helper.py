@@ -124,7 +124,7 @@ def get_dataset(file_pattern=None,is_training=True, batch_size=32,image_preproce
         tensor_dict = dict(zip(keys, tensors))
         org_image = tensor_dict['image']
         filename = tensor_dict['filename']
-        shape = tensor_dict['shape']
+        original_shape = tensor_dict['shape']
         glabels_raw = tensor_dict['object/label']
         gbboxes_raw = tensor_dict['object/bbox']
         isdifficult = tensor_dict['object/difficult']
@@ -153,10 +153,14 @@ def get_dataset(file_pattern=None,is_training=True, batch_size=32,image_preproce
         max_num_bboxes = 50
         glabels = pad_or_clip_nd(glabels,[max_num_bboxes])
         gbboxes = pad_or_clip_nd(gbboxes,[max_num_bboxes,4])
+        true_shape = tf.shape(image)
 
         features = image
-        labels = {'shape': shape,'num_groundtruth_boxes':num_groundtruth_boxes, 'gbboxes': gbboxes, 'glabels': glabels}
+        labels = {'original_shape':original_shape,'true_shape':true_shape ,'num_groundtruth_boxes':num_groundtruth_boxes, 'gbboxes': gbboxes, 'glabels': glabels}
+        if not is_training:
+            labels['original_image'] =org_image
         return (features,labels)
+
     # 读取dataset
     dataset = read_dataset(
         functools.partial(tf.data.TFRecordDataset, buffer_size=8 * 1000 * 1000),file_pattern)

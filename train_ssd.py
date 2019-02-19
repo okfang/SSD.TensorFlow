@@ -30,8 +30,9 @@ from net import ssd_net
 
 from dataset import dataset_common
 from preprocessing import ssd_preprocessing
-from utility import anchor_manipulator
-from utility import scaffolds
+from util import anchor_manipulator
+from util import scaffolds
+import eval_util
 
 # hardware related configuration
 tf.app.flags.DEFINE_integer(
@@ -539,7 +540,9 @@ def ssd_model_fn(features, labels, mode, params):
     total_loss = tf.add(cross_entropy + loc_loss,l2_loss, name='total_loss')
 
     if mode == tf.estimator.ModeKeys.EVAL:
-        # add metrics, execute none maximum suppression
+        # add metrics
+        # visualization
+        # execute none maximum suppression
         post_process_for_signle_example = lambda cls_pred, bboxes_pred: post_process(cls_pred, bboxes_pred,
                                                           params['num_classes'], params['select_threshold'],
                                                           params['min_size'],
@@ -553,7 +556,18 @@ def ssd_model_fn(features, labels, mode, params):
             selected_bboxes_list.append(selected_bboxes)
             selected_scores_list.append(selected_scores)
 
-        # calculate metrics
+        # visualize detected boxes
+
+        # generate metrics ops
+        eval_metric_ops ={}
+        category_index= {} #标签字典
+        evaluator = eval_util.get_evaluators(category_index,eval_metric_fn_key="coco_detection_metrics")
+        eval_metric_ops.update(evaluator.get_estimator_eval_metric_ops(eval_dict))
+
+
+
+
+
 
 
 
