@@ -16,6 +16,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import hashlib
 from datetime import datetime
 import os
 import random
@@ -88,7 +89,7 @@ def _bytes_feature(value):
   return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
 
 def _convert_to_example(filename, image_name, image_buffer, bboxes, labels, labels_text,
-                        difficult, truncated, height, width):
+                        difficult, truncated, height, width,key):
   """Build an Example proto for an example.
 
   Args:
@@ -131,7 +132,9 @@ def _convert_to_example(filename, image_name, image_buffer, bboxes, labels, labe
             'image/object/bbox/truncated': _int64_feature(truncated),
             'image/format': _bytes_feature(image_format),
             'image/filename': _bytes_feature(image_name.encode('utf8')),
-            'image/encoded': _bytes_feature(image_buffer)}))
+            'image/encoded': _bytes_feature(image_buffer),
+            'image/key/sha256': _bytes_feature(key.encode('utf8')),
+  }))
   return example
 
 
@@ -293,9 +296,10 @@ def _process_image_files_batch(coder, thread_index, ranges, name, directory, all
 
       bboxes, labels, labels_text, difficult, truncated = _find_image_bounding_boxes(directory, cur_record)
       image_buffer, height, width = _process_image(filename, coder)
+      key = hashlib.sha256(image_buffer).hexdigest()
 
       example = _convert_to_example(filename, cur_record[1], image_buffer, bboxes, labels, labels_text,
-                                    difficult, truncated, height, width)
+                                    difficult, truncated, height, width,key)
       writer.write(example.SerializeToString())
       shard_counter += 1
       counter += 1

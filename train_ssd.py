@@ -30,11 +30,13 @@ from net import ssd_net
 
 from dataset import dataset_common
 from preprocessing import ssd_preprocessing
-from util import anchor_manipulator
-from util import scaffolds
+from utils import anchor_manipulator
+from utils import scaffolds
 import eval_util
 
 # hardware related configuration
+from utils.shape_util import unpad_tensor, pad_or_clip_nd
+
 tf.app.flags.DEFINE_integer(
     'num_readers', 8,
     'The number of parallel readers that read data from the dataset.')
@@ -56,13 +58,13 @@ tf.app.flags.DEFINE_string(
     'model_dir', './logs_test/',
     'The directory where the model will be stored.')
 tf.app.flags.DEFINE_integer(
-    'log_every_n_steps', 10,
+    'log_every_n_steps',2,
     'The frequency with which logs are printed.')
 tf.app.flags.DEFINE_integer(
     'save_summary_steps', 100,
     'The frequency with which summaries are saved, in seconds.')
 tf.app.flags.DEFINE_integer(
-    'save_checkpoints_secs', 7200,
+    'save_checkpoints_secs', None,
     'The frequency with which the model is saved, in seconds.')
 # model related configuration
 tf.app.flags.DEFINE_integer(
@@ -128,8 +130,43 @@ tf.app.flags.DEFINE_boolean(
     'multi_gpu', True,
     'Whether there is GPU to use for training.')
 
+# eval parameter
+tf.app.flags.DEFINE_float(
+    'select_threshold', 0.01, 'Class-specific confidence score threshold for selecting a box.')
+tf.app.flags.DEFINE_float(
+    'min_size', 0.03, 'The min size of bboxes to keep.')
+tf.app.flags.DEFINE_float(
+    'nms_threshold', 0.45, 'Matching threshold in NMS algorithm.')
+tf.app.flags.DEFINE_integer(
+    'nms_topk', 200, 'Number of total object to keep after NMS.')
+tf.app.flags.DEFINE_integer(
+    'keep_topk', 400, 'Number of total object to keep for each image before nms.')
+
 FLAGS = tf.app.flags.FLAGS
 
+VOC_LABELS = {
+    'none': (0, 'Background'),
+    'aeroplane': (1, 'Vehicle'),
+    'bicycle': (2, 'Vehicle'),
+    'bird': (3, 'Animal'),
+    'boat': (4, 'Vehicle'),
+    'bottle': (5, 'Indoor'),
+    'bus': (6, 'Vehicle'),
+    'car': (7, 'Vehicle'),
+    'cat': (8, 'Animal'),
+    'chair': (9, 'Indoor'),
+    'cow': (10, 'Animal'),
+    'diningtable': (11, 'Indoor'),
+    'dog': (12, 'Animal'),
+    'horse': (13, 'Animal'),
+    'motorbike': (14, 'Vehicle'),
+    'person': (15, 'Person'),
+    'pottedplant': (16, 'Indoor'),
+    'sheep': (17, 'Animal'),
+    'sofa': (18, 'Indoor'),
+    'train': (19, 'Vehicle'),
+    'tvmonitor': (20, 'Indoor'),
+}
 
 # CUDA_VISIBLE_DEVICES
 def validate_batch_size_for_multi_gpu(batch_size):
@@ -229,14 +266,20 @@ def sort_bboxes(scores_pred, ymin, xmin, ymax, xmax, keep_topk, name):
 def nms_bboxes(scores_pred, bboxes_pred, nms_topk, nms_threshold, name):
     with tf.name_scope(name, 'nms_bboxes', [scores_pred, bboxes_pred]):
         idxes = tf.image.non_max_suppression(bboxes_pred, scores_pred, nms_topk, nms_threshold)
-        return tf.gather(scores_pred, idxes), tf.gather(bboxes_pred, idxes)
+        num_detections = tf.shape(idxes)[0]
+        return tf.gather(scores_pred, idxes), tf.gather(bboxes_pred, idxes),num_detections
 
-def post_process(cls_pred, bboxes_pred, num_classes, select_threshold, min_size, keep_topk, nms_topk, nms_threshold):
+def per_image_post_process(cls_pred, bboxes_pred, num_classes, select_threshold, min_size, keep_topk, nms_topk, nms_threshold):
     with tf.name_scope('select_bboxes', [cls_pred, bboxes_pred]):
         # calculate probability
         scores_pred = tf.nn.softmax(cls_pred)
         # organize boxes by classs, return a dict: {"class_id":suitable_bboxes_tensor}
         selected_bboxes, selected_scores = select_bboxes(scores_pred, bboxes_pred, num_classes, select_threshold)
+
+        per_image_detection_boxes = []
+        per_image_detection_classes = []
+        per_image_detection_scores = []
+        per_image_total_detections = 0
 
         for class_ind in range(1, num_classes):
             ymin, xmin, ymax, xmax = tf.unstack(selected_bboxes[class_ind], 4, axis=-1)
@@ -256,10 +299,20 @@ def post_process(cls_pred, bboxes_pred, num_classes, select_threshold, min_size,
 
             selected_bboxes[class_ind] = tf.stack([ymin, xmin, ymax, xmax], axis=-1)
 
-            # execute nms to get the final boxes
-            selected_scores[class_ind], selected_bboxes[class_ind] = nms_bboxes(selected_scores[class_ind], selected_bboxes[class_ind], nms_topk, nms_threshold, 'nms_bboxes_{}'.format(class_ind))
+            # execute nms to get the final boxes(  max num detections for each class)
+            detection_score, detection_boxes,num_detection= nms_bboxes(selected_scores[class_ind], selected_bboxes[class_ind], nms_topk, nms_threshold, 'nms_bboxes_{}'.format(class_ind))
 
-        return selected_bboxes, selected_scores
+            # collect all detections from one image
+            per_image_detection_boxes.append(detection_boxes)
+            per_image_detection_scores.append(detection_score)
+            per_image_detection_classes.append(tf.zeros_like(detection_score)+class_ind)
+            per_image_total_detections += num_detection
+
+        per_image_detection_boxes = tf.concat(per_image_detection_boxes,axis=0)
+        per_image_detection_scores = tf.concat(per_image_detection_scores,axis=0)
+        per_image_detection_classes = tf.concat(per_image_detection_classes,axis=0)
+
+        return per_image_detection_boxes, per_image_detection_scores,per_image_detection_classes,per_image_total_detections
 
 global_anchor_info = dict()
 
@@ -291,7 +344,7 @@ def input_pipeline(file_pattern='train-*', is_training=True, batch_size=FLAGS.ba
                                                                                                      is_training=is_training,
                                                                                                      data_format=FLAGS.data_format,
                                                                                                      output_rgb=False)
-        dataset = get_dataset(file_pattern=file_pattern, is_training=True, batch_size=batch_size,
+        dataset = get_dataset(file_pattern=file_pattern, is_training=is_training, batch_size=batch_size,
                               image_preprocessing_fn=image_preprocessing_fn)
         return dataset
 
@@ -320,45 +373,20 @@ def modified_smooth_l1(bbox_pred, bbox_targets, bbox_inside_weights=1., bbox_out
         return outside_mul
 
 
-# from scipy.misc import imread, imsave, imshow, imresize
-# import numpy as np
-# from utility import draw_toolbox
-
-# def save_image_with_bbox(image, labels_, scores_, bboxes_):
-#     if not hasattr(save_image_with_bbox, "counter"):
-#         save_image_with_bbox.counter = 0  # it doesn't exist yet, so initialize it
-#     save_image_with_bbox.counter += 1
-
-#     img_to_draw = np.copy(image)
-
-#     img_to_draw = draw_toolbox.bboxes_draw_on_img(img_to_draw, labels_, scores_, bboxes_, thickness=2)
-#     imsave(os.path.join('./debug/{}.jpg').format(save_image_with_bbox.counter), img_to_draw)
-#     return save_image_with_bbox.counter
-
-def unpad_tensor(tensor,num_groundtruth_boxes):
-    """将input_fn得到的label在num_boxes维度进行unpad,得到真实的boxes个数"""
-    tensor = tf.unstack(tensor)
-    num_groundtruth_boxes = tf.unstack(num_groundtruth_boxes)
-    unpadded_tensor_list = []
-    for num_gt, padded_tensor in zip( num_groundtruth_boxes,tensor):
-        tensor_shape = padded_tensor.shape.as_list()
-        slice_begin = tf.zeros([len(tensor_shape)], dtype=tf.int32)
-        slice_size = tf.stack(
-            [num_gt] + [-1 if dim is None else dim for dim in tensor_shape[1:]])
-        unpadded_tensor = tf.slice(padded_tensor, slice_begin, slice_size)
-        unpadded_tensor_list.append(unpadded_tensor)
-    return unpadded_tensor_list
-
 def ssd_model_fn(features, labels, mode, params):
     """model_fn for SSD to be used with our Estimator."""
-    shape = labels['shape']
+    shape = labels['original_shape']
     num_groundtruth_boxes = labels['num_groundtruth_boxes']
-    glabels = labels['glabels']
-    gbboxes = labels['gbboxes']
+    groundtruth_classes = labels['groundtruth_classes']
+    groundtruth_boxes = labels['groundtruth_boxes']
+
+    print("~~~~~~~~~~~~~~~~~~~~num_groundtruth_boxes:", num_groundtruth_boxes)
+    print("~~~~~~~~~~~~~~~~~~~~groundtruth_boxes:", groundtruth_boxes)
+    print("~~~~~~~~~~~~~~~~~~~~groundtruth_classes:", groundtruth_classes)
 
     # unpadding  num_boxes dimension for real num_groundtruth_boxes
-    glabels_list = unpad_tensor(glabels,num_groundtruth_boxes)
-    gbboxes_list = unpad_tensor(gbboxes,num_groundtruth_boxes)
+    groundtruth_classes_list = unpad_tensor(groundtruth_classes,num_groundtruth_boxes)
+    groundtruth_boxes_list = unpad_tensor(groundtruth_boxes,num_groundtruth_boxes)
 
     #  generate anchors
     #  resize anchors can be totally revert by the proportion of resized image and original image
@@ -387,8 +415,8 @@ def ssd_model_fn(features, labels, mode, params):
 
     # use "anchor_encoder_fn" to calculate the true labels:
     loc_targets_list, cls_targets_list, match_scores_list = [], [], []
-    for glabel, gbbox in zip(glabels_list,gbboxes_list):
-        loc_target,cls_target,match_score = anchor_encoder_fn(glabel, gbbox)
+    for _groundtruth_classes, _groundtruth_boxes in zip(groundtruth_classes_list,groundtruth_boxes_list):
+        loc_target,cls_target,match_score = anchor_encoder_fn(_groundtruth_classes, _groundtruth_boxes)
         loc_targets_list.append(loc_target)
         cls_targets_list.append(cls_target)
         match_scores_list.append(match_score)
@@ -459,7 +487,7 @@ def ssd_model_fn(features, labels, mode, params):
                 batch_n_neg_select = tf.cast(params['negative_ratio'] * tf.cast(batch_n_positives, tf.float32),
                                              tf.int32)
                 batch_n_neg_select = tf.minimum(batch_n_neg_select, tf.cast(batch_n_negtives, tf.int32))
-                tf.identity(batch_n_positives[0], name="num_negatives_select")
+                tf.identity(batch_n_neg_select[0], name="num_negatives_select")
 
                 # hard negative mining for classification
                 predictions_for_bg = tf.nn.softmax(
@@ -484,7 +512,7 @@ def ssd_model_fn(features, labels, mode, params):
                 total_examples = tf.count_nonzero(final_mask)
 
                 # tensors used in loss calculation
-                cls_pred = tf.boolean_mask(cls_pred, final_mask)
+                cls_pred_after_hard_neg_mining = tf.boolean_mask(cls_pred, final_mask)
                 location_pred = tf.boolean_mask(location_pred, tf.stop_gradient(positive_mask))
                 flaten_cls_targets = tf.boolean_mask(tf.clip_by_value(flaten_cls_targets, 0, params['num_classes']),
                                                      final_mask)
@@ -495,7 +523,7 @@ def ssd_model_fn(features, labels, mode, params):
                     'classes': tf.argmax(cls_pred, axis=-1),
                     'probabilities': tf.reduce_max(tf.nn.softmax(cls_pred, name='softmax_tensor'), axis=-1),
                     'loc_predict': bboxes_pred}
-                cls_accuracy = tf.metrics.accuracy(flaten_cls_targets, predictions['classes'])
+                cls_accuracy = tf.metrics.accuracy(flaten_cls_targets, tf.argmax(cls_pred_after_hard_neg_mining,axis=-1))
                 metrics = {'cls_accuracy': cls_accuracy}
 
                 # Create a tensor named train_accuracy for logging purposes.
@@ -508,7 +536,7 @@ def ssd_model_fn(features, labels, mode, params):
     # Calculate loss, which includes softmax cross entropy and L2 regularization.
     # cross_entropy = tf.cond(n_positives > 0, lambda: tf.losses.sparse_softmax_cross_entropy(labels=flaten_cls_targets, logits=cls_pred), lambda: 0.)# * (params['negative_ratio'] + 1.)
     # flaten_cls_targets=tf.Print(flaten_cls_targets, [flaten_loc_targets],summarize=50000)
-    cross_entropy = tf.losses.sparse_softmax_cross_entropy(labels=flaten_cls_targets, logits=cls_pred) * (
+    cross_entropy = tf.losses.sparse_softmax_cross_entropy(labels=flaten_cls_targets, logits=cls_pred_after_hard_neg_mining) * (
                 params['negative_ratio'] + 1.)
 
     # Create a tensor named cross_entropy for logging purposes.
@@ -543,33 +571,68 @@ def ssd_model_fn(features, labels, mode, params):
         # add metrics
         # visualization
         # execute none maximum suppression
-        post_process_for_signle_example = lambda cls_pred, bboxes_pred: post_process(cls_pred, bboxes_pred,
+        post_process_for_signle_example = lambda _cls_pred, _bboxes_pred: per_image_post_process(_cls_pred, _bboxes_pred,
                                                           params['num_classes'], params['select_threshold'],
                                                           params['min_size'],
                                                           params['keep_topk'], params['nms_topk'], params['nms_threshold'])
 
-        cls_pred_list,bboxes_pred_list = tf.unstack(cls_pred),tf.unstack(bboxes_pred)
-        selected_bboxes_list, selected_scores_list = [],[]
+        cls_pred_list, bboxes_pred_list = tf.unstack(tf.reshape(cls_pred,[tf.shape(features)[0],-1,params['num_classes']])), \
+                                          tf.unstack(tf.reshape(bboxes_pred,[tf.shape(features)[0],-1,4]))
+        detection_boxes_list, detection_scores_list,detection_classes_list,num_detections_list= [],[],[],[]
+        max_detction_num = 100
         for cls_pred, bboxes_pred in zip(cls_pred_list,bboxes_pred_list):
             # post_process func only proceess one image once a time
-            selected_bboxes, selected_scores = post_process_for_signle_example(cls_pred, bboxes_pred)
-            selected_bboxes_list.append(selected_bboxes)
-            selected_scores_list.append(selected_scores)
+            detection_boxes, detection_scores,detection_classes,\
+                         num_detections = post_process_for_signle_example(cls_pred, bboxes_pred)
+
+            # padding along num_detections dimension
+            detection_boxes = pad_or_clip_nd(detection_boxes,[max_detction_num,4])
+            detection_scores = pad_or_clip_nd(detection_scores,[max_detction_num])
+            detection_classes= pad_or_clip_nd(detection_classes,[max_detction_num])
+
+            detection_boxes_list.append(detection_boxes)
+            detection_scores_list.append(detection_scores)
+            detection_classes_list.append(detection_classes)
+            num_detections_list.append(num_detections)
+
+        # batched detections
+        detection_boxes = tf.stack(detection_boxes_list,axis=0)
+        detection_scores = tf.stack(detection_scores_list,axis=0)
+        detection_classes = tf.stack(detection_classes_list,axis=0)
+        num_detections = tf.stack(num_detections_list,axis=0)
+
+        print("~~~~~~~~~~~~~~~~~~~~detection_boxes:",detection_boxes)
+        print("~~~~~~~~~~~~~~~~~~~~detection_scores:",detection_scores)
+        print("~~~~~~~~~~~~~~~~~~~~detection_classes:",detection_classes)
+        print("~~~~~~~~~~~~~~~~~~~~num_detections:",num_detections)
+
+        print("~~~~~~~~~~~~~~~~~~~~num_groundtruth_boxes:",num_groundtruth_boxes)
+        print("~~~~~~~~~~~~~~~~~~~~groundtruth_boxes:",groundtruth_boxes)
+        print("~~~~~~~~~~~~~~~~~~~~groundtruth_classes:",groundtruth_classes)
+
+
+        tf.identity(num_detections[0], name="num_detections")
 
         # visualize detected boxes
 
         # generate metrics ops
-        eval_metric_ops ={}
-        category_index= {} #标签字典
-        evaluator = eval_util.get_evaluators(category_index,eval_metric_fn_key="coco_detection_metrics")
-        eval_metric_ops.update(evaluator.get_estimator_eval_metric_ops(eval_dict))
-
-
-
-
-
-
-
+        eval_dict = {
+            # goundtruths
+            'num_groundtruth_boxes_per_image': num_groundtruth_boxes,
+            'groundtruth_boxes': groundtruth_boxes,
+            'groundtruth_classes': groundtruth_classes,
+            # detections
+            'detection_boxes': detection_boxes,
+            'detection_scores': detection_scores,
+            'detection_classes': detection_classes,
+            "num_det_boxes_per_image": num_detections,
+            # image id
+            'key':labels["key"]
+        }
+        categories = [{"id":id,"name":name}for (id,name) in VOC_LABELS.values()]
+        evaluator = eval_util.get_evaluators(categories,eval_metric_fn_key="coco_detection_metrics")
+        eval_metric_ops = evaluator.get_estimator_eval_metric_ops(eval_dict)
+        metrics.update(eval_metric_ops)
 
     if mode == tf.estimator.ModeKeys.TRAIN:
         global_step = tf.train.get_or_create_global_step()
@@ -578,7 +641,7 @@ def ssd_model_fn(features, labels, mode, params):
         learning_rate = tf.train.piecewise_constant(tf.cast(global_step, tf.int32),
                                                     [int(_) for _ in params['decay_boundaries']],
                                                     lr_values)
-
+        # execute truncated_learning_rate
         truncated_learning_rate = tf.maximum(learning_rate,
                                              tf.constant(params['end_learning_rate'], dtype=learning_rate.dtype),
                                              name='learning_rate')
@@ -616,7 +679,7 @@ def main(_):
     gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=FLAGS.gpu_memory_fraction)
 
     # multi gpu training strategy
-    strategy = tf.contrib.distribute.MirroredStrategy(num_gpus=2)
+    # strategy = tf.contrib.distribute.MirroredStrategy(num_gpus=2)
     config = tf.ConfigProto(allow_soft_placement=True,
                             log_device_placement=False,
                             intra_op_parallelism_threads=FLAGS.num_cpu_threads,
@@ -628,13 +691,14 @@ def main(_):
     # Set up a RunConfig to only save checkpoints once per training cycle.
     run_config = tf.estimator.RunConfig().replace(
         save_checkpoints_secs=FLAGS.save_checkpoints_secs).replace(
-        save_checkpoints_steps=None).replace(
+        save_checkpoints_steps=10).replace(
         save_summary_steps=FLAGS.save_summary_steps).replace(
         keep_checkpoint_max=5).replace(
         tf_random_seed=FLAGS.tf_random_seed).replace(
         log_step_count_steps=FLAGS.log_every_n_steps).replace(
         session_config=config).replace(
-        train_distribute=strategy)
+        # train_distribute=strategy
+    )
 
     # replicate_ssd_model_fn = tf.contrib.estimator.replicate_model_fn(ssd_model_fn, loss_reduction=tf.losses.Reduction.MEAN)
     ssd_detector = tf.estimator.Estimator(
@@ -654,6 +718,12 @@ def main(_):
             'end_learning_rate': FLAGS.end_learning_rate,
             'decay_boundaries': parse_comma_list(FLAGS.decay_boundaries),
             'lr_decay_factors': parse_comma_list(FLAGS.lr_decay_factors),
+            # eval stage
+            'select_threshold': FLAGS.select_threshold,
+            'min_size': FLAGS.min_size,
+            'nms_threshold': FLAGS.nms_threshold,
+            'nms_topk': FLAGS.nms_topk,
+            'keep_topk': FLAGS.keep_topk
         })
     # log tensor
     tensors_to_log = {
@@ -663,18 +733,48 @@ def main(_):
         'loss': 'total_loss',
         'l2': 'l2_loss',
         'acc': 'post_forward/cls_accuracy',
+        'num_positives':'post_forward/num_positives',
+        'num_negatives_selected':'post_forward/num_negatives_select'
     }
     # loggging hook：define how to log
-    logging_hook = tf.train.LoggingTensorHook(tensors=tensors_to_log, every_n_iter=FLAGS.log_every_n_steps,
+    train_logging_hook = tf.train.LoggingTensorHook(tensors=tensors_to_log, every_n_iter=FLAGS.log_every_n_steps,
                                               formatter=lambda dicts: (
                                                   ', '.join(['%s=%.6f' % (k, v) for k, v in dicts.items()])))
 
     # hook = tf.train.ProfilerHook(save_steps=50, output_dir='.', show_memory=True)
     print('Starting a training cycle.')
-    ssd_detector.train(
-        input_fn=input_pipeline(file_pattern='/home/dxfang/dataset/tfrecords/pascal_voc/train-000*', is_training=True, batch_size=FLAGS.batch_size),
-        hooks=[logging_hook], max_steps=FLAGS.max_number_of_steps)
+    # ssd_detector.train(
+    #     input_fn=input_pipeline(file_pattern='/home/dxfang/dataset/tfrecords/pascal_voc/train-000*', is_training=True, batch_size=FLAGS.batch_size),
+    #     hooks=[logging_hook], max_steps=FLAGS.max_number_of_steps)
 
+    train_spec = tf.estimator.TrainSpec(
+        input_fn=input_pipeline(file_pattern='/home/dxfang/dataset/tfrecords/pascal_voc/train-000*', is_training=True, batch_size=FLAGS.batch_size),
+        max_steps=FLAGS.max_number_of_steps,
+        hooks= [train_logging_hook]
+    )
+
+    eval_tensors_to_log = {
+        # 'lr': 'learning_rate',
+        'ce': 'cross_entropy_loss',
+        'loc': 'location_loss',
+        'loss': 'total_loss',
+        'l2': 'l2_loss',
+        'acc': 'post_forward/cls_accuracy',
+        'num_positives': 'post_forward/num_positives',
+        'num_negatives_selected': 'post_forward/num_negatives_select',
+        'num_detections':'num_detections'
+    }
+    eval_logging_hook =  tf.train.LoggingTensorHook(tensors=eval_tensors_to_log, every_n_iter=FLAGS.log_every_n_steps,
+                                              formatter=lambda dicts: (
+                                                  ', '.join(['%s=%.6f' % (k, v) for k, v in dicts.items()])))
+    eval_spec = tf.estimator.EvalSpec(
+        input_fn=input_pipeline(file_pattern='/home/dxfang/dataset/tfrecords/pascal_voc/eval-000*', is_training=False, batch_size=FLAGS.batch_size),
+        hooks=[eval_logging_hook]
+    )
+    # tf.estimator.train_and_evaluate(ssd_detector,train_spec,eval_spec)
+
+    ssd_detector.evaluate(input_fn=input_pipeline(file_pattern='/home/dxfang/dataset/tfrecords/pascal_voc/eval-000*', is_training=False, batch_size=FLAGS.batch_size),
+        steps=20,hooks=[eval_logging_hook])
 
 if __name__ == '__main__':
     tf.logging.set_verbosity(tf.logging.INFO)

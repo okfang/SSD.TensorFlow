@@ -265,7 +265,7 @@ class AnchorEncoder(object):
             return tf.split(tf.stack(center2point(pred_cy, pred_cx, pred_h, pred_w), axis=-1), num_anchors_per_layer, axis=0)
 
 class AnchorCreator(object):
-    def __init__(self, img_shape, layers_shapes, anchor_scales, extra_anchor_scales, anchor_ratios, layer_steps,allowed_borders):
+    def __init__(self, img_shape, layers_shapes, anchor_scales, extra_anchor_scales, anchor_ratios, layer_steps):
         super(AnchorCreator, self).__init__()
         # img_shape -> (height, width)
         self._img_shape = img_shape
@@ -275,7 +275,6 @@ class AnchorCreator(object):
         self._anchor_ratios = anchor_ratios
         self._layer_steps = layer_steps
         self._anchor_offset = [0.5] * len(self._layers_shapes)
-        self._allowed_borders=allowed_borders,
         self._clip=False
 
     def get_layer_anchors(self, layer_shape, anchor_scale, extra_anchor_scale, anchor_ratio, layer_step, offset = 0.5):
