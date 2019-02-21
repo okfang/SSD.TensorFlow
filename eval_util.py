@@ -35,13 +35,13 @@ slim = tf.contrib.slim
 # utils.object_detection_evaluation.DetectionEvaluator interface.
 EVAL_METRICS_CLASS_DICT = {
     'coco_detection_metrics':
-        coco_evaluation.CocoDetectionEvaluator
+        coco_evaluation.CocoDetectionEvaluator,
     # 'coco_mask_metrics':
     #     coco_evaluation.CocoMaskEvaluator,
     # 'oid_challenge_detection_metrics':
     #     object_detection_evaluation.OpenImagesDetectionChallengeEvaluator,
-    # 'pascal_voc_detection_metrics':
-    #     object_detection_evaluation.PascalDetectionEvaluator,
+    'pascal_voc_detection_metrics':
+        object_detection_evaluation.PascalDetectionEvaluator,
     # 'weighted_pascal_voc_detection_metrics':
     #     object_detection_evaluation.WeightedPascalDetectionEvaluator,
     # 'pascal_voc_instance_segmentation_metrics':

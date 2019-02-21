@@ -138,6 +138,8 @@ tf.app.flags.DEFINE_integer(
 tf.app.flags.DEFINE_integer(
     'keep_topk', 400, 'Number of total object to keep for each image before nms.')
 
+# visualization   parameter
+
 FLAGS = tf.app.flags.FLAGS
 
 VOC_LABELS = {
