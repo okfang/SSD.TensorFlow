@@ -22,8 +22,8 @@ import tensorflow as tf
 from scipy.misc import imread, imsave, imshow, imresize
 import numpy as np
 import sys; sys.path.insert(0, ".")
-from utility import draw_toolbox
-from utility import anchor_manipulator
+from utils import draw_toolbox
+from utils import anchor_manipulator
 from preprocessing import ssd_preprocessing
 
 slim = tf.contrib.slim

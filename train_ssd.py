@@ -17,10 +17,6 @@ from __future__ import division
 from __future__ import print_function
 
 import os
-# 添加路径
-# import sys
-# from os.path import abspath, join, dirname
-# sys.path.insert(0,abspath(dirname(__file__)))
 
 import tensorflow as tf
 import functools
@@ -30,7 +26,7 @@ from net import ssd_net
 
 from dataset import dataset_common
 from preprocessing import ssd_preprocessing
-from utils import anchor_manipulator
+from utils import anchor_manipulator, visualization_utils
 from utils import scaffolds
 import eval_util
 
@@ -168,47 +164,11 @@ VOC_LABELS = {
     'tvmonitor': (20, 'Indoor'),
 }
 
-# CUDA_VISIBLE_DEVICES
-def validate_batch_size_for_multi_gpu(batch_size):
-    """For multi-gpu, batch-size must be a multiple of the number of
-    available GPUs.
-
-    Note that this should eventually be handled by replicate_model_fn
-    directly. Multi-GPU support is currently experimental, however,
-    so doing the work here until that feature is in place.
-    """
-    if FLAGS.multi_gpu:
-        from tensorflow.python.client import device_lib
-
-        local_device_protos = device_lib.list_local_devices()
-        num_gpus = sum([1 for d in local_device_protos if d.device_type == 'GPU'])
-        if not num_gpus:
-            raise ValueError('Multi-GPU mode was specified, but no GPUs '
-                             'were found. To use CPU, run --multi_gpu=False.')
-
-        remainder = batch_size % num_gpus
-        if remainder:
-            err = ('When running with multiple GPUs, batch size '
-                   'must be a multiple of the number of available GPUs. '
-                   'Found {} GPUs with a batch size of {}; try --batch_size={} instead.'
-                   ).format(num_gpus, batch_size, batch_size - remainder)
-            raise ValueError(err)
-        return num_gpus
-    return 0
-
-
 def get_init_fn():
     return scaffolds.get_init_fn_for_scaffold(FLAGS.model_dir, FLAGS.checkpoint_path,
                                               FLAGS.model_scope, FLAGS.checkpoint_model_scope,
                                               FLAGS.checkpoint_exclude_scopes, FLAGS.ignore_missing_vars,
                                               name_remap={'/kernel': '/weights', '/bias': '/biases'})
-
-
-# couldn't find better way to pass params from input_fn to model_fn
-# some tensors used by model_fn must be created in input_fn to ensure they are in the same graph
-# but when we put these tensors to labels's dict, the replicate_model_fn will split them into each GPU
-# the problem is that they shouldn't be splited
-
 
 def select_bboxes(scores_pred, bboxes_pred, num_classes, select_threshold):
     selected_bboxes = {}
@@ -379,10 +339,8 @@ def ssd_model_fn(features, labels, mode, params):
     num_groundtruth_boxes = labels['num_groundtruth_boxes']
     groundtruth_classes = labels['groundtruth_classes']
     groundtruth_boxes = labels['groundtruth_boxes']
-
-    print("~~~~~~~~~~~~~~~~~~~~num_groundtruth_boxes:", num_groundtruth_boxes)
-    print("~~~~~~~~~~~~~~~~~~~~groundtruth_boxes:", groundtruth_boxes)
-    print("~~~~~~~~~~~~~~~~~~~~groundtruth_classes:", groundtruth_classes)
+    original_image_spatial_shape =  labels['original_image_spatial_shape']
+    true_image_shape = labels['true_image_shape']
 
     # unpadding  num_boxes dimension for real num_groundtruth_boxes
     groundtruth_classes_list = unpad_tensor(groundtruth_classes,num_groundtruth_boxes)
@@ -578,6 +536,7 @@ def ssd_model_fn(features, labels, mode, params):
 
         cls_pred_list, bboxes_pred_list = tf.unstack(tf.reshape(cls_pred,[tf.shape(features)[0],-1,params['num_classes']])), \
                                           tf.unstack(tf.reshape(bboxes_pred,[tf.shape(features)[0],-1,4]))
+
         detection_boxes_list, detection_scores_list,detection_classes_list,num_detections_list= [],[],[],[]
         max_detction_num = 100
         for cls_pred, bboxes_pred in zip(cls_pred_list,bboxes_pred_list):
@@ -601,22 +560,12 @@ def ssd_model_fn(features, labels, mode, params):
         detection_classes = tf.stack(detection_classes_list,axis=0)
         num_detections = tf.stack(num_detections_list,axis=0)
 
-        print("~~~~~~~~~~~~~~~~~~~~detection_boxes:",detection_boxes)
-        print("~~~~~~~~~~~~~~~~~~~~detection_scores:",detection_scores)
-        print("~~~~~~~~~~~~~~~~~~~~detection_classes:",detection_classes)
-        print("~~~~~~~~~~~~~~~~~~~~num_detections:",num_detections)
-
-        print("~~~~~~~~~~~~~~~~~~~~num_groundtruth_boxes:",num_groundtruth_boxes)
-        print("~~~~~~~~~~~~~~~~~~~~groundtruth_boxes:",groundtruth_boxes)
-        print("~~~~~~~~~~~~~~~~~~~~groundtruth_classes:",groundtruth_classes)
-
-
         tf.identity(num_detections[0], name="num_detections")
 
-        # visualize detected boxes
-
-        # generate metrics ops
         eval_dict = {
+            'original_image_spatial_shape': original_image_spatial_shape,
+            'true_image_shape':true_image_shape,
+            'original_image':labels['original_image'],
             # goundtruths
             'num_groundtruth_boxes_per_image': num_groundtruth_boxes,
             'groundtruth_boxes': groundtruth_boxes,
@@ -627,9 +576,21 @@ def ssd_model_fn(features, labels, mode, params):
             'detection_classes': detection_classes,
             "num_det_boxes_per_image": num_detections,
             # image id
-            'key':labels["key"]
+            'key': labels["key"]
         }
-        categories = [{"id":id,"name":name}for (id,name) in VOC_LABELS.values()]
+        category_index = {id: {"id": id, "name": name} for (id, name) in VOC_LABELS.values()}
+        categories = category_index.values()
+        # visualize detected boxes
+        eval_metric_op_vis = visualization_utils.VisualizeSingleFrameDetections(
+            category_index,
+            max_examples_to_draw=params['num_visualizations'],
+            max_boxes_to_draw=params['max_num_boxes_to_visualize'],
+            min_score_thresh=params['min_score_threshold'],
+            use_normalized_coordinates=False)
+        vis_metric_ops = eval_metric_op_vis.get_estimator_eval_metric_ops(eval_dict)
+        metrics.update(vis_metric_ops)
+
+        # generate metrics ops
         evaluator = eval_util.get_evaluators(categories,eval_metric_fn_key="coco_detection_metrics")
         eval_metric_ops = evaluator.get_estimator_eval_metric_ops(eval_dict)
         metrics.update(eval_metric_ops)
@@ -685,8 +646,6 @@ def main(_):
                             intra_op_parallelism_threads=FLAGS.num_cpu_threads,
                             inter_op_parallelism_threads=FLAGS.num_cpu_threads,
                             gpu_options=gpu_options, )
-
-    # num_gpus = validate_batch_size_for_multi_gpu(FLAGS.batch_size)
 
     # Set up a RunConfig to only save checkpoints once per training cycle.
     run_config = tf.estimator.RunConfig().replace(
@@ -779,36 +738,3 @@ def main(_):
 if __name__ == '__main__':
     tf.logging.set_verbosity(tf.logging.INFO)
     tf.app.run()
-
-    # cls_targets = tf.reshape(cls_targets, [-1])
-    # match_scores = tf.reshape(match_scores, [-1])
-    # loc_targets = tf.reshape(loc_targets, [-1, 4])
-
-    # # each positive examples has one label
-    # positive_mask = cls_targets > 0
-    # n_positives = tf.count_nonzero(positive_mask)
-
-    # negtive_mask = tf.logical_and(tf.equal(cls_targets, 0), match_scores > 0.)
-    # n_negtives = tf.count_nonzero(negtive_mask)
-
-    # n_neg_to_select = tf.cast(params['negative_ratio'] * tf.cast(n_positives, tf.float32), tf.int32)
-    # n_neg_to_select = tf.minimum(n_neg_to_select, tf.cast(n_negtives, tf.int32))
-
-    # # hard negative mining for classification
-    # predictions_for_bg = tf.nn.softmax(cls_pred)[:, 0]
-
-    # prob_for_negtives = tf.where(negtive_mask,
-    #                        0. - predictions_for_bg,
-    #                        # ignore all the positives
-    #                        0. - tf.ones_like(predictions_for_bg))
-    # topk_prob_for_bg, _ = tf.nn.top_k(prob_for_negtives, k=n_neg_to_select)
-    # selected_neg_mask = prob_for_negtives > topk_prob_for_bg[-1]
-
-    # # include both selected negtive and all positive examples
-    # final_mask = tf.stop_gradient(tf.logical_or(tf.logical_and(negtive_mask, selected_neg_mask), positive_mask))
-    # total_examples = tf.count_nonzero(final_mask)
-
-    # glabels = tf.boolean_mask(tf.clip_by_value(cls_targets, 0, FLAGS.num_classes), final_mask)
-    # cls_pred = tf.boolean_mask(cls_pred, final_mask)
-    # location_pred = tf.boolean_mask(location_pred, tf.stop_gradient(positive_mask))
-    # loc_targets = tf.boolean_mask(loc_targets, tf.stop_gradient(positive_mask))

@@ -490,8 +490,8 @@ def preprocess_for_eval(image, out_shape, data_format='channels_first', scope='s
   with tf.name_scope(scope, 'ssd_preprocessing_eval', [image]):
     image = tf.to_float(image)
     image = tf.image.resize_images(image, out_shape, method=tf.image.ResizeMethod.BILINEAR, align_corners=False)
+    image_before_normalization = image
     image.set_shape(out_shape + [3])
-
     image = _mean_image_subtraction(image, [_R_MEAN, _G_MEAN, _B_MEAN])
     if not output_rgb:
       image_channels = tf.unstack(image, axis=-1, name='split_rgb')
@@ -499,7 +499,7 @@ def preprocess_for_eval(image, out_shape, data_format='channels_first', scope='s
     # Image data format.
     if data_format == 'channels_first':
       image = tf.transpose(image, perm=(2, 0, 1))
-    return image
+    return image_before_normalization, image
 
 def preprocess_image(image, labels, bboxes, out_shape, is_training=False, data_format='channels_first', output_rgb=True):
   """Preprocesses the given image.

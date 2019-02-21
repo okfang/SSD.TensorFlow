@@ -85,7 +85,7 @@ def get_dataset(file_pattern=None,is_training=True, batch_size=32,image_preproce
         tensor_dict = dict(zip(keys, tensors))
         orginal_image = tensor_dict['image']
         filename = tensor_dict['filename']
-        original_shape = tensor_dict['shape']
+        original_image_spatial_shape = tensor_dict['shape']
         glabels_raw = tensor_dict['object/label']
         gbboxes_raw = tensor_dict['object/bbox']
         isdifficult = tensor_dict['object/difficult']
@@ -107,7 +107,7 @@ def get_dataset(file_pattern=None,is_training=True, batch_size=32,image_preproce
         if is_training:
             preprocessed_image, groundtruth_classes, groundtruth_boxes = image_preprocessing_fn(orginal_image, glabels_raw, gbboxes_raw)
         else:
-            preprocessed_image = image_preprocessing_fn(orginal_image, glabels_raw, gbboxes_raw)
+            image_before_normalization, preprocessed_image = image_preprocessing_fn(orginal_image, glabels_raw, gbboxes_raw)
             groundtruth_classes, groundtruth_boxes = glabels_raw, gbboxes_raw
 
         # padding in num_bboxes dimension 防止batch内样本形状不一
@@ -115,19 +115,20 @@ def get_dataset(file_pattern=None,is_training=True, batch_size=32,image_preproce
         max_num_bboxes = 50
         groundtruth_classes = pad_or_clip_nd(groundtruth_classes,output_shape = [max_num_bboxes])
         groundtruth_boxes = pad_or_clip_nd(groundtruth_boxes,output_shape = [max_num_bboxes,4])
-        true_shape = tf.shape(preprocessed_image)
+
+        true_image_shape = tf.shape(preprocessed_image)
 
         features = preprocessed_image
 
-        labels = {'original_shape':original_shape,
-                  'true_shape':true_shape ,
-                  'num_groundtruth_boxes':num_groundtruth_boxes,
+        labels = {'original_image_spatial_shape': original_image_spatial_shape,
+                  'true_image_shape': true_image_shape,
+                  'num_groundtruth_boxes': num_groundtruth_boxes,
                   'groundtruth_boxes': groundtruth_boxes,
                   'groundtruth_classes': groundtruth_classes,
                   'key':key}
 
-        # if not is_training:
-        #     labels['original_image'] =orginal_image
+        if not is_training:
+            labels['original_image'] = image_before_normalization
 
         return (features,labels)
 
