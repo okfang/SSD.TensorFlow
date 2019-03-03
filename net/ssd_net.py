@@ -212,8 +212,7 @@ class VGG16Backbone(object):
                         name='{}_1'.format(name), _scope='{}_1'.format(name), _reuse=None)
                 )
             conv_bn_blocks.append(
-                    tf.layers.BatchNormalization(axis=self._bn_axis, momentum=BN_MOMENTUM, epsilon=BN_EPSILON, fused=USE_FUSED_BN,
-                        name='{}_bn1'.format(name), _scope='{}_bn1'.format(name), _reuse=None)
+                    tf.layers.BatchNormalization(axis=self._bn_axis,name='{}_bn1'.format(name), _scope='{}_bn1'.format(name), _reuse=None)
                 )
             conv_bn_blocks.append(
                     ReLuLayer('{}_relu1'.format(name), _scope='{}_relu1'.format(name), _reuse=None)
@@ -226,8 +225,7 @@ class VGG16Backbone(object):
                         name='{}_2'.format(name), _scope='{}_2'.format(name), _reuse=None)
                 )
             conv_bn_blocks.append(
-                    tf.layers.BatchNormalization(axis=self._bn_axis, momentum=BN_MOMENTUM, epsilon=BN_EPSILON, fused=USE_FUSED_BN,
-                        name='{}_bn2'.format(name), _scope='{}_bn2'.format(name), _reuse=None)
+                    tf.layers.BatchNormalization(axis=self._bn_axis,name='{}_bn2'.format(name), _scope='{}_bn2'.format(name), _reuse=None)
                 )
             conv_bn_blocks.append(
                     ReLuLayer('{}_relu2'.format(name), _scope='{}_relu2'.format(name), _reuse=None)

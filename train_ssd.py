@@ -598,6 +598,29 @@ def ssd_model_fn(features, labels, mode, params):
         metrics.update(eval_metric_ops)
 
     if mode == tf.estimator.ModeKeys.TRAIN:
+
+        # distillate knowledge
+        if params["distillation"] == True:
+            with tf.variable_scope('distillation',values=[features]):
+                dist_backbone = ssd_net.VGG16Backbone(params['data_format'])
+                dist_feature_layers = dist_backbone.forward(features, training=(mode == tf.estimator.ModeKeys.TRAIN))
+                dist_location_pred, dist_cls_pred = ssd_net.multibox_head(dist_feature_layers, params['num_classes'],
+                                                                all_num_anchors_depth,
+                                                                data_format=params['data_format'])
+                if params['data_format'] == 'channels_first':
+                    dist_cls_pred = [tf.transpose(pred, [0, 2, 3, 1]) for pred in dist_cls_pred]
+                    dist_location_pred = [tf.transpose(pred, [0, 2, 3, 1]) for pred in dist_location_pred]
+                dist_cls_pred = [tf.reshape(pred, [tf.shape(features)[0], -1, params['num_classes']]) for pred in dist_cls_pred]
+                dist_location_pred = [tf.reshape(pred, [tf.shape(features)[0], -1, 4]) for pred in dist_location_pred]
+                dist_cls_pred = tf.concat(dist_cls_pred, axis=1)
+                dist_location_pred = tf.concat(dist_location_pred, axis=1)
+                dist_cls_pred = tf.reshape(dist_cls_pred, [-1, params['num_classes']])
+                dist_location_pred = tf.reshape(dist_location_pred, [-1, 4])
+
+                distillate_cls_loss = tf.reduce_mean(tf.square())
+
+
+
         global_step = tf.train.get_or_create_global_step()
         # dynamic learning rate
         lr_values = [params['learning_rate'] * decay for decay in params['lr_decay_factors']]
