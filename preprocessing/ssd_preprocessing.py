@@ -451,12 +451,6 @@ def preprocess_for_train(image, labels, bboxes, out_shape, data_format='channels
                                           num_cases=4)
 
     random_sample_image, labels, bboxes = ssd_random_sample_patch_wrapper(distort_image, labels, bboxes)
-    # image, bboxes = tf.cond(tf.random_uniform([1], minval=0., maxval=1., dtype=tf.float32)[0] < 0.25,
-    #                     lambda: (image, bboxes),
-    #                     lambda: ssd_random_expand(image, bboxes, tf.random_uniform([1], minval=2, maxval=4, dtype=tf.int32)[0]))
-
-    # # Distort image and bounding boxes.
-    # random_sample_image, labels, bboxes = ssd_random_sample_patch(image, labels, bboxes, ratio_list=[0.1, 0.3, 0.5, 0.7, 0.9, 1.])
 
     # Randomly flip the image horizontally.
     random_sample_flip_image, bboxes = random_flip_left_right(random_sample_image, bboxes)
@@ -503,7 +497,6 @@ def preprocess_for_eval(image, out_shape, data_format='channels_first', scope='s
 
 def preprocess_image(image, labels, bboxes, out_shape, is_training=False, data_format='channels_first', output_rgb=True):
   """Preprocesses the given image.
-
   Args:
     image: A `Tensor` representing an image of arbitrary size.
     labels: A `Tensor` containing all labels for all bboxes of this image.

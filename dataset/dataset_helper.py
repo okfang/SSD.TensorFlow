@@ -32,15 +32,8 @@ def read_dataset(file_read_func, file_pattern,num_readers=4):
     return records_dataset
 
 
-def  get_dataset(class_list=None,file_pattern=None,is_training=True, batch_size=32,image_preprocessing_fn=None, anchor_encoder_fn=None):
-    """
-    使用原生的dataset api
-    得到用于estimator输入的dataset
-    :param is_training:
-    :param image_preprocessing_fn: 数据预处理
-    :param anchor_encoder_fn: 生成对应的anchor
-    :return:dataset
-    """
+def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size=32,image_preprocessing_fn=None):
+
     # Features in Pascal VOC TFRecords.
     keys_to_features = {
         'image/encoded': tf.FixedLenFeature((), tf.string, default_value=''),
@@ -50,7 +43,7 @@ def  get_dataset(class_list=None,file_pattern=None,is_training=True, batch_size=
         'image/height': tf.FixedLenFeature([1], tf.int64),
         'image/width': tf.FixedLenFeature([1], tf.int64),
         'image/channels': tf.FixedLenFeature([1], tf.int64),
-        'image/shape': tf.FixedLenFeature([3], tf.int64),
+        'image/shape': tf.FixedLenFeature([3], tf.int32),
         'image/object/bbox/xmin': tf.VarLenFeature(dtype=tf.float32),
         'image/object/bbox/ymin': tf.VarLenFeature(dtype=tf.float32),
         'image/object/bbox/xmax': tf.VarLenFeature(dtype=tf.float32),
@@ -73,26 +66,18 @@ def  get_dataset(class_list=None,file_pattern=None,is_training=True, batch_size=
     decoder = slim.tfexample_decoder.TFExampleDecoder(keys_to_features, items_to_handlers)
 
     def process_fn(serialized_example):
-        """
-        1.解码tf_example
-        2.数据预处理
-        :param value: tf record
-        :return: features  and  labels
-        """""
         # slim decode tf example
         keys = decoder.list_items()
         tensors = decoder.decode(serialized_example, items=keys)
         tensor_dict = dict(zip(keys, tensors))
-        orginal_image = tensor_dict['image']
+        original_image = tensor_dict['image']
         filename = tensor_dict['filename']
-        original_image_spatial_shape = tf.cast(tensor_dict['shape'][:2],tf.int32)
-
         glabels_raw = tensor_dict['object/label']
         gbboxes_raw = tensor_dict['object/bbox']
         isdifficult = tensor_dict['object/difficult']
         key = tensor_dict['key']
 
-        # 过滤类别：不存在对应类别呢？可以返回假的数据，然后gt的数量设为0
+        # filter class
         if class_list != None:
             valid_class_mask = tf.map_fn(lambda label: label in class_list, glabels_raw)
             glabels_raw = tf.boolean_mask(glabels_raw,valid_class_mask)
@@ -101,7 +86,7 @@ def  get_dataset(class_list=None,file_pattern=None,is_training=True, batch_size=
         if tf.shape(glabels_raw) == 0:
             return None
 
-        # preprocessing image
+        # filter difficult example
         if is_training:
             # if all is difficult, then keep the first one
             isdifficult_mask = tf.cond(tf.count_nonzero(isdifficult, dtype=tf.int32) < tf.shape(isdifficult)[0],
@@ -113,21 +98,24 @@ def  get_dataset(class_list=None,file_pattern=None,is_training=True, batch_size=
             gbboxes_raw = tf.boolean_mask(gbboxes_raw, isdifficult_mask)
 
         # Pre-processing image, labels and bboxes.
-
         if is_training:
-            preprocessed_image, groundtruth_classes, groundtruth_boxes = image_preprocessing_fn(orginal_image, glabels_raw, gbboxes_raw)
+            preprocessed_image, groundtruth_classes, groundtruth_boxes = image_preprocessing_fn(original_image, glabels_raw, gbboxes_raw)
         else:
-            image_before_normalization, preprocessed_image = image_preprocessing_fn(orginal_image, glabels_raw, gbboxes_raw)
+            image_before_normalization, preprocessed_image = image_preprocessing_fn(original_image, glabels_raw, gbboxes_raw)
             groundtruth_classes, groundtruth_boxes = glabels_raw, gbboxes_raw
 
-        # padding in num_bboxes dimension 防止batch内样本形状不一
         num_groundtruth_boxes = tf.shape(groundtruth_boxes)[0]
         max_num_bboxes = 50
+
+        # padding in num_bboxes dimension
         groundtruth_classes = pad_or_clip_nd(groundtruth_classes,output_shape = [max_num_bboxes])
         groundtruth_boxes = pad_or_clip_nd(groundtruth_boxes,output_shape = [max_num_bboxes,4])
-
+        # [3]
         true_image_shape = tf.shape(preprocessed_image)
 
+        # [2]
+        original_image_spatial_shape = tensor_dict['shape'][:2]
+        # [300,300,]
         features = preprocessed_image
 
         labels = {'original_image_spatial_shape': original_image_spatial_shape,
@@ -135,7 +123,7 @@ def  get_dataset(class_list=None,file_pattern=None,is_training=True, batch_size=
                   'num_groundtruth_boxes': num_groundtruth_boxes,
                   'groundtruth_boxes': groundtruth_boxes,
                   'groundtruth_classes': groundtruth_classes,
-                  'key':key}
+                  'key': key}
 
         if not is_training:
             labels['original_image'] = image_before_normalization
