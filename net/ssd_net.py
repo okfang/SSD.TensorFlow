@@ -121,15 +121,22 @@ class VGG16Backbone(object):
         # forward vgg layers
         for conv in self._conv1_block:
             inputs = forward_module(conv, inputs, training=training)
+            print('--------------inputs:',inputs)
         inputs = self._pool1.apply(inputs)
+        print('--------------inputs:', inputs)
         for conv in self._conv2_block:
             inputs = forward_module(conv, inputs, training=training)
+            print('--------------inputs:', inputs)
         inputs = self._pool2.apply(inputs)
+        print('--------------inputs:', inputs)
         for conv in self._conv3_block:
             inputs = forward_module(conv, inputs, training=training)
+            print('--------------inputs:', inputs)
         inputs = self._pool3.apply(inputs)
+        print('--------------inputs:', inputs)
         for conv in self._conv4_block:
             inputs = forward_module(conv, inputs, training=training)
+            print('--------------inputs:', inputs)
         # conv4_3
         with tf.variable_scope('conv4_3_scale') as scope:
             weight_scale = tf.Variable([20.] * 512, trainable=training, name='weights')
@@ -141,29 +148,38 @@ class VGG16Backbone(object):
             feature_layers.append(tf.multiply(weight_scale, self.l2_normalize(inputs, name='norm'), name='rescale')
                                 )
         inputs = self._pool4.apply(inputs)
+        print('--------------inputs:', inputs)
         for conv in self._conv5_block:
             inputs = forward_module(conv, inputs, training=training)
+            print('--------------inputs:', inputs)
         inputs = self._pool5.apply(inputs)
+        print('--------------inputs:', inputs)
         # forward fc layers
         inputs = self._conv6.apply(inputs)
+        print('--------------inputs:', inputs)
         inputs = self._conv7.apply(inputs)
+        print('--------------inputs:', inputs)
         # fc7
         feature_layers.append(inputs)
         # forward ssd layers
         for layer in self._conv8_block:
             inputs = forward_module(layer, inputs, training=training)
+            print('--------------inputs:', inputs)
         # conv8
         feature_layers.append(inputs)
         for layer in self._conv9_block:
             inputs = forward_module(layer, inputs, training=training)
+            print('--------------inputs:', inputs)
         # conv9
         feature_layers.append(inputs)
         for layer in self._conv10_block:
             inputs = forward_module(layer, inputs, training=training)
+            print('--------------inputs:', inputs)
         # conv10
         feature_layers.append(inputs)
         for layer in self._conv11_block:
             inputs = forward_module(layer, inputs, training=training)
+            print('--------------inputs:', inputs)
         # conv11
         feature_layers.append(inputs)
 

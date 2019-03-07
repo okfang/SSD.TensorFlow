@@ -32,7 +32,7 @@ def read_dataset(file_read_func, file_pattern,num_readers=4):
     return records_dataset
 
 
-def get_dataset(file_pattern=None,is_training=True, batch_size=32,image_preprocessing_fn=None, anchor_encoder_fn=None):
+def  get_dataset(class_list=None,file_pattern=None,is_training=True, batch_size=32,image_preprocessing_fn=None, anchor_encoder_fn=None):
     """
     使用原生的dataset api
     得到用于estimator输入的dataset
@@ -86,10 +86,20 @@ def get_dataset(file_pattern=None,is_training=True, batch_size=32,image_preproce
         orginal_image = tensor_dict['image']
         filename = tensor_dict['filename']
         original_image_spatial_shape = tensor_dict['shape']
+
         glabels_raw = tensor_dict['object/label']
         gbboxes_raw = tensor_dict['object/bbox']
         isdifficult = tensor_dict['object/difficult']
         key = tensor_dict['key']
+
+        # 过滤类别：不存在对应类别呢？可以返回假的数据，然后gt的数量设为0
+        if class_list != None:
+            valid_class_mask = tf.map_fn(lambda label: label in class_list, glabels_raw)
+            glabels_raw = tf.boolean_mask(glabels_raw,valid_class_mask)
+            gbboxes_raw = tf.boolean_mask(gbboxes_raw,valid_class_mask)
+            isdifficult = tf.boolean_mask(isdifficult,valid_class_mask)
+        if tf.shape(glabels_raw) == 0:
+            return None
 
         # preprocessing image
         if is_training:
@@ -130,11 +140,12 @@ def get_dataset(file_pattern=None,is_training=True, batch_size=32,image_preproce
         if not is_training:
             labels['original_image'] = image_before_normalization
 
-        return (features,labels)
+        return features, labels
 
     # 读取dataset
     dataset = read_dataset(
         functools.partial(tf.data.TFRecordDataset, buffer_size=8 * 1000 * 1000),file_pattern)
+
     # 预处理
     dataset = dataset.map(process_fn,num_parallel_calls=batch_size*2)
     dataset = dataset.batch(batch_size=batch_size, drop_remainder=True)
