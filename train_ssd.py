@@ -183,7 +183,7 @@ def main(_):
         tf_random_seed=FLAGS.tf_random_seed).replace(
         log_step_count_steps=FLAGS.log_every_n_steps).replace(
         session_config=sess_config).replace(
-        # train_distribute=distribute_strategy
+        train_distribute=distribute_strategy
     )
 
     # replicate_ssd_model_fn = tf.contrib.estimator.replicate_model_fn(ssd_model_fn, loss_reduction=tf.losses.Reduction.MEAN)
@@ -248,7 +248,7 @@ def main(_):
         'acc': 'post_forward/cls_accuracy',
         'num_positives': 'post_forward/num_positives',
         'num_negatives_selected': 'post_forward/num_negatives_select',
-        'num_detections': 'num_detections'
+        'num_detections_after_nms': 'num_detections_after_nms'
     }
     eval_logging_hook = tf.train.LoggingTensorHook(tensors=eval_tensors_to_log, every_n_iter=FLAGS.log_every_n_steps,
                                                    formatter=lambda dicts: (

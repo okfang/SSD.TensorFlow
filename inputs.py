@@ -5,7 +5,7 @@ from dataset.dataset_helper import get_dataset
 train_image_size = 300
 global_anchor_info = dict()
 
-def input_pipeline(file_pattern='train-*', is_training=True, batch_size=None,data_format='channel_first'):
+def input_pipeline(file_pattern='train-*', is_training=True, batch_size=None,data_format='channels_first'):
     def input_fn(params=None):
         out_shape = [train_image_size] * 2
         anchor_creator = anchor_manipulator.AnchorCreator(out_shape,

@@ -56,7 +56,7 @@ def modified_smooth_l1(bbox_pred, bbox_targets, bbox_inside_weights=1., bbox_out
 
 def ssd_model_fn(features, labels, mode, params):
     """model_fn for SSD to be used with our Estimator."""
-    print("-------------------------------------features tensor:",features)
+
     num_groundtruth_boxes = labels['num_groundtruth_boxes']
     groundtruth_classes = labels['groundtruth_classes']
     groundtruth_boxes = labels['groundtruth_boxes']
@@ -297,9 +297,9 @@ def ssd_model_fn(features, labels, mode, params):
         # visualize detected boxes
         eval_metric_op_vis = visualization_utils.VisualizeSingleFrameDetections(
             category_index,
-            max_examples_to_draw=params['num_visualizations'],
-            max_boxes_to_draw=params['max_num_boxes_to_visualize'],
-            min_score_thresh=params['min_score_threshold'],
+            max_examples_to_draw=params['max_examples_to_draw'],
+            max_boxes_to_draw=params['max_boxes_to_draw'],
+            min_score_thresh=params['min_score_thresh'],
             use_normalized_coordinates=False)
         vis_metric_ops = eval_metric_op_vis.get_estimator_eval_metric_ops(eval_dict)
         metrics.update(vis_metric_ops)

@@ -85,7 +85,7 @@ def  get_dataset(class_list=None,file_pattern=None,is_training=True, batch_size=
         tensor_dict = dict(zip(keys, tensors))
         orginal_image = tensor_dict['image']
         filename = tensor_dict['filename']
-        original_image_spatial_shape = tensor_dict['shape']
+        original_image_spatial_shape = tf.cast(tensor_dict['shape'][:2],tf.int32)
 
         glabels_raw = tensor_dict['object/label']
         gbboxes_raw = tensor_dict['object/bbox']
