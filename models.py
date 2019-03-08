@@ -1,3 +1,5 @@
+import functools
+
 import tensorflow as tf
 
 import eval_util
@@ -54,64 +56,17 @@ def modified_smooth_l1(bbox_pred, bbox_targets, bbox_inside_weights=1., bbox_out
 
         return outside_mul
 
-def ssd_model_fn(features, labels, mode, params):
-    """model_fn for SSD to be used with our Estimator."""
 
-    num_groundtruth_boxes = labels['num_groundtruth_boxes']
-    groundtruth_classes = labels['groundtruth_classes']
-    groundtruth_boxes = labels['groundtruth_boxes']
-    original_image_spatial_shape =  labels['original_image_spatial_shape']
-    true_image_shape = labels['true_image_shape']
-
-    # unpadding  num_boxes dimension for real num_groundtruth_boxes
-    groundtruth_classes_list = unpad_tensor(groundtruth_classes,num_groundtruth_boxes)
-    groundtruth_boxes_list = unpad_tensor(groundtruth_boxes,num_groundtruth_boxes)
-
-    #  generate anchors
-    #  resize anchors can be totally revert by the proportion of resized image and original image
-    # ,so there is no need to generate different anchors for different process
-    global global_anchor_info
-    all_anchors = global_anchor_info["all_anchors"]
-    all_num_anchors_depth = global_anchor_info["all_num_anchors_depth"]
-    all_num_anchors_spatial = global_anchor_info["all_num_anchors_spatial"]
-
-    # calculate the number of anchors in each feature layer.
-    num_anchors_per_layer = [depth*spatial for depth,spatial in
-                             zip(all_num_anchors_depth,all_num_anchors_spatial)]
-
-    anchor_encoder_decoder = anchor_manipulator.AnchorEncoder(positive_threshold=params['match_threshold'],
-                                                              ignore_threshold=params['neg_threshold'],
-                                                              prior_scaling=[0.1, 0.1, 0.2, 0.2],
-                                                              allowed_borders=[1.0] * 6)
-    # encode function for anchors: assign labels by the iou matrics
-    anchor_encoder_fn = lambda glabels_, gbboxes_: anchor_encoder_decoder.encode_all_anchors(glabels_, gbboxes_,
-                                                                                             all_anchors,
-                                                                                             all_num_anchors_depth,
-                                                                                             all_num_anchors_spatial)
-
-    # decode function for anchors: convert the prediction to anchor coordinate
-    decode_fn = lambda pred: anchor_encoder_decoder.decode_all_anchors(pred, all_anchors,num_anchors_per_layer)
-
-    # use "anchor_encoder_fn" to calculate the true labels:
-    loc_targets_list, cls_targets_list, match_scores_list = [], [], []
-    for _groundtruth_classes, _groundtruth_boxes in zip(groundtruth_classes_list,groundtruth_boxes_list):
-        loc_target,cls_target,match_score = anchor_encoder_fn(_groundtruth_classes, _groundtruth_boxes)
-        loc_targets_list.append(loc_target)
-        cls_targets_list.append(cls_target)
-        match_scores_list.append(match_score)
-    loc_targets = tf.stack(loc_targets_list,axis=0)
-    cls_targets = tf.stack(cls_targets_list,axis=0)
-    match_scores = tf.stack(match_scores_list,axis=0)
-
-    with tf.variable_scope(params['model_scope'], default_name=None, values=[features], reuse=tf.AUTO_REUSE):
+def predict(features,mode,params,all_num_anchors_depth):
+    with tf.variable_scope(params["model_scope"], default_name=None, values=[features], reuse=tf.AUTO_REUSE):
         # get vgg16 net
         backbone = ssd_net.VGG16Backbone(params['data_format'])
-
-        # calculate the feature layers and return
+        # return feature layers
+        # feature_layers -> ['conv4','fc7','conv8','conv9','conv10','conv11']
         feature_layers = backbone.forward(features, training=(mode == tf.estimator.ModeKeys.TRAIN))
 
-        # execute prediction, and the prediction organized like:
-        # [(batch,feature_map_shape[0],feature_map_shape[1],anchor_per_position*4)]
+        # location_pred -> [[batch_size, num_anchor_per_position*4, feature_map_size, feature_map_size,],[],[],[],[],[]]
+        # cls_pred -> [[batch_size, num_anchor_per_position*21, feature_map_size, feature_map_size,],[],[],[],[],[]]
         location_pred, cls_pred = ssd_net.multibox_head(feature_layers, params['num_classes'], all_num_anchors_depth,
                                                         data_format=params['data_format'])
 
@@ -120,31 +75,89 @@ def ssd_model_fn(features, labels, mode, params):
             cls_pred = [tf.transpose(pred, [0, 2, 3, 1]) for pred in cls_pred]
             location_pred = [tf.transpose(pred, [0, 2, 3, 1]) for pred in location_pred]
 
-        # flatten tensor
         cls_pred = [tf.reshape(pred, [tf.shape(features)[0], -1, params['num_classes']]) for pred in cls_pred]
         location_pred = [tf.reshape(pred, [tf.shape(features)[0], -1, 4]) for pred in location_pred]
-        # final shape: (batch,num_anchors,4)  (batch,num_anchors,num_classes)
+        # cls_pred -> shape: [batch_size,num_all_anchors,21]
+        # cls_pred -> shape: [batch_size,num_all_anchors,4]
         cls_pred = tf.concat(cls_pred, axis=1)
         location_pred = tf.concat(location_pred, axis=1)
-        cls_pred = tf.reshape(cls_pred, [-1, params['num_classes']])
-        location_pred = tf.reshape(location_pred, [-1, 4])
+        return cls_pred, location_pred
+
+
+def ssd_model_fn(features, labels, mode, params):
+    # get and process input
+    num_groundtruth_boxes = labels['num_groundtruth_boxes']
+    groundtruth_classes = labels['groundtruth_classes']
+    groundtruth_boxes = labels['groundtruth_boxes']
+    original_image_spatial_shape = labels['original_image_spatial_shape']
+    true_image_shape = labels['true_image_shape']
+
+    # unpadding  num_boxes dimension for real num_groundtruth_boxes
+    groundtruth_classes_list = unpad_tensor(groundtruth_classes,num_groundtruth_boxes)
+    groundtruth_boxes_list = unpad_tensor(groundtruth_boxes,num_groundtruth_boxes)
+
+    global global_anchor_info
+    # (anchor_cy, anchor_cx, anchor_h, anchor_w)  -> shape: [num_all_anchors,]
+    all_anchors = global_anchor_info["all_anchors"]
+    all_num_anchors_depth = global_anchor_info["all_num_anchors_depth"]
+    all_num_anchors_spatial = global_anchor_info["all_num_anchors_spatial"]
+
+    # calculate the number of anchors of each feature layer.
+    num_anchors_per_layer = [depth*spatial for depth,spatial in zip(all_num_anchors_depth,all_num_anchors_spatial)]
+
+    anchor_encoder_decoder = anchor_manipulator.AnchorEncoder(positive_threshold=params['positive_threshold'],
+                                                              neg_threshold=params['neg_threshold'],
+                                                              prior_scaling=[0.1, 0.1, 0.2, 0.2],
+                                                              allowed_borders=[1.0] * 6)
+    # encode function for anchors: assign labels by the iou_matrix
+    anchor_encoder_fn = functools.partial(anchor_encoder_decoder.encode_all_anchors,
+                                          all_anchors=all_anchors,
+                                          all_num_anchors_depth=all_num_anchors_depth,
+                                          all_num_anchors_spatial=all_num_anchors_spatial)
+
+    # decode function for anchors: convert the location_pred  to anchor coordinates
+    decode_fn = functools.partial(anchor_encoder_decoder.decode_all_anchors,
+                                  all_anchors=all_anchors,
+                                  num_anchors_per_layer=num_anchors_per_layer)
+
+    # construct train example
+    loc_targets_list, cls_targets_list, matched_iou_scores_list = [], [], []
+    for _groundtruth_classes, _groundtruth_boxes in zip(groundtruth_classes_list,groundtruth_boxes_list):
+        loc_target, cls_target, matched_iou_score = anchor_encoder_fn(labels=_groundtruth_classes, bboxes=_groundtruth_boxes)
+        loc_targets_list.append(loc_target)
+        cls_targets_list.append(cls_target)
+        matched_iou_scores_list.append(matched_iou_score)
+
+    # loc_targets ->shape: [batch_size, num_all_anchors,4]
+    # cls_targets ->shape: [batch_size, num_all_anchors]
+    # matched_iou_scores ->shape: [batch_size, num_all_anchors]
+    loc_targets = tf.stack(loc_targets_list,axis=0)
+    cls_targets = tf.stack(cls_targets_list,axis=0)
+    matched_iou_scores = tf.stack(matched_iou_scores_list,axis=0)
+
+    # cls_pred -> shape: [batch_size,num_all_anchors,21]
+    # location_pred -> shape: [batch_size,num_all_anchors,4]
+    cls_pred, location_pred = predict(features,mode,params,all_num_anchors_depth)
+
+
+
+    # cls_pred -> shape:[batch_size*num_all_anchors,21]
+    # location_pred -> shape:[batch_size*num_all_anchors,4]
+    cls_pred = tf.reshape(cls_pred, [-1, params['num_classes']])
+    location_pred = tf.reshape(location_pred, [-1, 4])
 
     with tf.device('/cpu:0'):
         with tf.control_dependencies([cls_pred, location_pred]):
             with tf.name_scope('post_forward'):
-                # bboxes_pred = decode_fn(location_pred)
-
                 # decode predictions to a list which element has shape[(num_anchors_per_layer[0],4),(num_anchors_per_layer[1],4),...]
-                bboxes_pred = tf.map_fn(lambda _preds: decode_fn(_preds),
-                                        tf.reshape(location_pred, [tf.shape(features)[0], -1, 4]),
-                                        dtype=[tf.float32] * len(num_anchors_per_layer), back_prop=False)
+                bboxes_pred = tf.map_fn(decode_fn,location_pred,dtype=[tf.float32] * len(num_anchors_per_layer), back_prop=False)
 
                 bboxes_pred = [tf.reshape(preds, [-1, 4]) for preds in bboxes_pred]
                 bboxes_pred = tf.concat(bboxes_pred, axis=0)
 
                 # flaten for calculate accuracy
                 flaten_cls_targets = tf.reshape(cls_targets, [-1])
-                flaten_match_scores = tf.reshape(match_scores, [-1])
+                flaten_match_scores = tf.reshape(matched_iou_scores, [-1])
                 flaten_loc_targets = tf.reshape(loc_targets, [-1, 4])
 
                 # hard negative mining for claculate loss
@@ -253,10 +266,10 @@ def ssd_model_fn(features, labels, mode, params):
 
         detection_boxes_list, detection_scores_list,detection_classes_list,num_detections_list= [],[],[],[]
         max_detction_num = 100
-        for cls_pred, bboxes_pred in zip(cls_pred_list,bboxes_pred_list):
+        for cls_pred_, bboxes_pred_ in zip(cls_pred_list,bboxes_pred_list):
             # post_process func only proceess one image once a time
             detection_boxes, detection_scores,detection_classes,\
-                         num_detections = post_process_for_signle_example(cls_pred, bboxes_pred)
+                         num_detections = post_process_for_signle_example(cls_pred_, bboxes_pred_)
 
             # padding along num_detections dimension
             detection_boxes = pad_or_clip_nd(detection_boxes,[max_detction_num,4])

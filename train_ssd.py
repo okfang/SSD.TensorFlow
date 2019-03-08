@@ -25,7 +25,7 @@ from models import ssd_model_fn
 from utils import scaffolds
 
 # hardware related configuration
-from inputs import input_pipeline, dist_input_fn
+from inputs import input_pipeline
 
 tf.app.flags.DEFINE_integer(
     'num_readers', 8,
@@ -78,7 +78,7 @@ tf.app.flags.DEFINE_string(
 tf.app.flags.DEFINE_float(
     'negative_ratio', 3., 'Negative ratio in the loss function.')
 tf.app.flags.DEFINE_float(
-    'match_threshold', 0.5, 'Matching threshold in the loss function.')
+    'positive_threshold', 0.5, 'Matching threshold in the loss function.')
 tf.app.flags.DEFINE_float(
     'neg_threshold', 0.5, 'Matching threshold for the negtive examples in the loss function.')
 # optimizer related configuration
@@ -190,7 +190,7 @@ def main(_):
             'model_scope': FLAGS.model_scope,
             'num_classes': FLAGS.num_classes,
             'negative_ratio': FLAGS.negative_ratio,
-            'match_threshold': FLAGS.match_threshold,
+            'positive_threshold': FLAGS.positive_threshold,
             'neg_threshold': FLAGS.neg_threshold,
             'weight_decay': FLAGS.weight_decay,
             'momentum': FLAGS.momentum,

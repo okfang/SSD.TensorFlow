@@ -1,6 +1,6 @@
 from preprocessing import ssd_preprocessing
 from utils import anchor_manipulator
-from dataset.dataset_helper import get_dataset
+from dataset.dataset_helper import build_dataset
 
 train_image_size = 300
 global_anchor_info = dict()
@@ -22,11 +22,13 @@ def input_pipeline(class_list=None,file_pattern='train-*', is_training=True, bat
                                                                          (1., 2., 3., .5, 0.3333), (1., 2., .5),
                                                                          (1., 2., .5)],
                                                           layer_steps=[8, 16, 32, 64, 100, 300],)
+        # all_anchors shape:[num_all_defualt_anchors,]  8732= 38*38*(3*6+6)+ .....
         all_anchors, all_num_anchors_depth, all_num_anchors_spatial = anchor_creator.get_all_anchors()
+        # Serialization anchors
         global global_anchor_info
         global_anchor_info["all_anchors"] = all_anchors
-        global_anchor_info["all_num_anchors_depth"] =  all_num_anchors_depth
-        global_anchor_info["all_num_anchors_spatial"] =  all_num_anchors_spatial
+        global_anchor_info["all_num_anchors_depth"] = all_num_anchors_depth
+        global_anchor_info["all_num_anchors_spatial"] = all_num_anchors_spatial
 
         image_preprocessing_fn = lambda image_, labels_, bboxes_: ssd_preprocessing.preprocess_image(image_, labels_,
                                                                                                      bboxes_, out_shape,
