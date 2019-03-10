@@ -198,12 +198,9 @@ class AnchorEncoder(object):
 
             return gt_targets, gt_labels, matched_iou_scores
 
-    # return a list, of which each is:
-    #   shape: [feature_h, feature_w, num_anchors, 4]
-    #   order: ymin, xmin, ymax, xmax
     def decode_all_anchors(self, pred_location, all_anchors=None,num_anchors_per_layer=None):
         with tf.name_scope('decode_all_anchors', [pred_location]):
-            # get from center format anchors
+            # anchor_cy ->shape: [num_all_anchors,]
             anchor_cy, anchor_cx, anchor_h, anchor_w = all_anchors
             
             # change predict offset to coordinate
@@ -211,8 +208,11 @@ class AnchorEncoder(object):
             pred_w = tf.exp(pred_location[:, -1] * self._prior_scaling[3]) * anchor_w
             pred_cy = pred_location[:, 0] * self._prior_scaling[0] * anchor_h + anchor_cy
             pred_cx = pred_location[:, 1] * self._prior_scaling[1] * anchor_w + anchor_cx
-            # return point anchor list:shape organize by num_anchors_per_layer
-            return tf.split(tf.stack(center2point(pred_cy, pred_cx, pred_h, pred_w), axis=-1), num_anchors_per_layer, axis=0)
+            # pred_point -> shpep: [num_all_anchors,4]
+            pred_point = tf.stack(center2point(pred_cy, pred_cx, pred_h, pred_w),axis=-1)
+            # list [[num_anchors_per_layer,4],[][][][][]]
+            pred_point_per_layer_list = tf.split(pred_point, num_anchors_per_layer, axis=0)
+            return pred_point_per_layer_list
 
     def ext_decode_all_anchors(self, pred_location, all_anchors, all_num_anchors_depth, all_num_anchors_spatial):
         assert (len(all_num_anchors_depth)==len(all_num_anchors_spatial)) and (len(all_num_anchors_depth)==len(all_anchors)), 'inconsist num layers for anchors.'

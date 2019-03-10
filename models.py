@@ -84,26 +84,139 @@ def predict(features,mode,params,all_num_anchors_depth):
         return cls_pred, location_pred
 
 
-def ssd_model_fn(features, labels, mode, params):
-    # get and process input
-    num_groundtruth_boxes = labels['num_groundtruth_boxes']
-    groundtruth_classes = labels['groundtruth_classes']
-    groundtruth_boxes = labels['groundtruth_boxes']
-    original_image_spatial_shape = labels['original_image_spatial_shape']
-    true_image_shape = labels['true_image_shape']
+def hard_example_mining(cls_targets, cls_pred, params):
+    """ 
+    :param cls_targets  [batch_size,num_all_anchors]
+    :param cls_pred  [batch_size,num_all_anchors,21]
+    :return:
+        final_mask: for ce_loss  [batch_size*num_all_anchors,]
+        positive_mask: for loc_loss  [batch_size*num_all_anchors,]
+    """
+    with tf.name_scope('hard_example_mining'):
+        # flatten
+        flatten_cls_targets = tf.reshape(cls_targets, [-1])
+        # find all positive anchors
+        positive_mask = flatten_cls_targets > 0
 
-    # unpadding  num_boxes dimension for real num_groundtruth_boxes
-    groundtruth_classes_list = unpad_tensor(groundtruth_classes,num_groundtruth_boxes)
-    groundtruth_boxes_list = unpad_tensor(groundtruth_boxes,num_groundtruth_boxes)
+        # batch_n_positives：->shape: [batch_size,]
+        batch_n_positives_mask = tf.greater(cls_targets, 0)
+        batch_n_positives = tf.count_nonzero(batch_n_positives_mask, -1)
+        tf.identity(batch_n_positives[0], name="num_positives")
+
+        batch_negtive_mask = tf.equal(cls_targets, 0)
+        batch_n_negtives = tf.count_nonzero(batch_negtive_mask, -1)
+
+        # number of negative
+        batch_n_neg_select = tf.cast(params['negative_ratio'] * tf.cast(batch_n_positives, tf.float32),
+                                     tf.int32)
+        batch_n_neg_select = tf.minimum(batch_n_neg_select, tf.cast(batch_n_negtives, tf.int32))
+        tf.identity(batch_n_neg_select[0], name="num_negatives_select")
+
+        # hard negative mining  select negative depend on   predictions_for_bg  not matched_IOU_score
+
+        # predictions_for_bg -> shape: [batch_size,num_all_anchors,]
+        predictions_for_bg = tf.nn.softmax(cls_pred)[:, :, 0]
+        # # prob_for_negtives -> shape: [batch_size,num_all_anchors,]
+        prob_for_negtives = tf.where(batch_negtive_mask,
+                                     0. - predictions_for_bg,
+                                     0. - tf.ones_like(predictions_for_bg))
+
+        # default sorted
+        # topk_prob_for_bg -> shape: [batch_size,num_all_anchors,]
+        topk_prob_for_bg, _ = tf.nn.top_k(prob_for_negtives, k=tf.shape(prob_for_negtives)[1])
+        # score_at_k : anchors grater than this score will have lower probability( hard negative example)
+        score_at_k = tf.gather_nd(topk_prob_for_bg,
+                                  tf.stack([tf.range(tf.shape(cls_targets)[0]), batch_n_neg_select - 1], axis=-1))
+        selected_neg_mask = prob_for_negtives >= tf.expand_dims(score_at_k, axis=-1)
+
+        # include both selected negtive and all positive examples
+        negative_mask = tf.reshape(tf.logical_and(batch_negtive_mask, selected_neg_mask), [-1])
+        final_mask = tf.stop_gradient(tf.logical_or(negative_mask,positive_mask))
+
+        return final_mask, positive_mask
+
+
+def build_losses(cls_targets=None,cls_pred=None, loc_targets=None,loc_pred=None, params=None):
+    cross_entropy = tf.losses.sparse_softmax_cross_entropy(labels=cls_targets,logits=cls_pred) * (params['negative_ratio'] + 1.)
+    tf.identity(cross_entropy, name='cross_entropy_loss')
+    tf.summary.scalar('cross_entropy_loss', cross_entropy)
+
+    # loc_loss = tf.cond(n_positives > 0, lambda: modified_smooth_l1(location_pred, tf.stop_gradient(flatten_loc_targets), sigma=1.), lambda: tf.zeros_like(location_pred))
+    loc_loss = modified_smooth_l1(loc_pred, loc_targets,sigma=1.)
+    loc_loss = tf.reduce_mean(tf.reduce_sum(loc_loss, axis=-1), name='location_loss')
+    tf.summary.scalar('location_loss', loc_loss)
+    tf.losses.add_loss(loc_loss)
+
+    # loss for regularization
+    l2_loss_vars = []
+    for trainable_var in tf.trainable_variables():
+        if '_bn' not in trainable_var.name:
+            if 'conv4_3_scale' not in trainable_var.name:
+                l2_loss_vars.append(tf.nn.l2_loss(trainable_var))
+            else:
+                l2_loss_vars.append(tf.nn.l2_loss(trainable_var) * 0.1)
+    # Add weight decay to the loss. We exclude the batch norm variables because
+    # doing so leads to a small improvement in accuracy.
+    l2_loss = tf.multiply(params['weight_decay'], tf.add_n(l2_loss_vars), name='l2_loss')
+
+    return cross_entropy, loc_loss, l2_loss
+
+
+def build_distillation_loss(features,cls_pred,location_pred,mode,all_num_anchors_depth,params):
+    with tf.variable_scope('distillation', values=[features]):
+        dist_backbone = ssd_net.VGG16Backbone(params['data_format'])
+        dist_feature_layers = dist_backbone.forward(features, training=(mode == tf.estimator.ModeKeys.TRAIN))
+        dist_location_pred, dist_cls_pred = ssd_net.multibox_head(dist_feature_layers, params['num_classes'],
+                                                                  all_num_anchors_depth,
+                                                                  data_format=params['data_format'])
+        if params['data_format'] == 'channels_first':
+            dist_cls_pred = [tf.transpose(pred, [0, 2, 3, 1]) for pred in dist_cls_pred]
+            dist_location_pred = [tf.transpose(pred, [0, 2, 3, 1]) for pred in dist_location_pred]
+        dist_cls_pred = [tf.reshape(pred, [tf.shape(features)[0], -1, params['num_classes']]) for pred in dist_cls_pred]
+        dist_location_pred = [tf.reshape(pred, [tf.shape(features)[0], -1, 4]) for pred in dist_location_pred]
+        dist_cls_pred = tf.concat(dist_cls_pred, axis=1)
+        dist_location_pred = tf.concat(dist_location_pred, axis=1)
+        dist_cls_pred = tf.reshape(dist_cls_pred, [-1, params['num_classes']])
+        dist_location_pred = tf.reshape(dist_location_pred, [-1, 4])
+        # class_distillation_loss
+        cls_logits = cls_pred[:, :params['cached_classes'] + 1] - tf.reduce_mean(
+            cls_pred[:, :params['cached_classes'] + 1], axis=1, keep_dims=True)
+        cls_distillated_logits = dist_cls_pred[:, :params['cached_classes'] + 1] - tf.reduce_mean(
+            dist_cls_pred[:, :params['cached_classes'] + 1], axis=1, keep_dims=True)
+        class_distillation_loss = tf.reduce_mean(tf.square(cls_logits - cls_distillated_logits),
+                                                 name='class_distillation_loss')
+        class_distillation_loss *= params.get('class_distillation_loss_coef', 1)
+        tf.summary.scalar('class_distillation_loss', class_distillation_loss)
+
+        # 只惩罚那些negative的bboxes?
+        bboxes_distillation_loss = tf.reduce_mean(
+            tf.reduce_mean(tf.square(location_pred - dist_location_pred), axis=1, keep_dims=True),
+            name='bboxes_distillation_loss')
+        bboxes_distillation_loss *= params.get('bbox_distillation_loss_coef', 1)
+        tf.summary.scalar('bboxes_distillation_loss', bboxes_distillation_loss)
+
+        return class_distillation_loss, bboxes_distillation_loss
+
+
+def ssd_model_fn(features, labels, mode, params):
 
     global global_anchor_info
     # (anchor_cy, anchor_cx, anchor_h, anchor_w)  -> shape: [num_all_anchors,]
     all_anchors = global_anchor_info["all_anchors"]
     all_num_anchors_depth = global_anchor_info["all_num_anchors_depth"]
     all_num_anchors_spatial = global_anchor_info["all_num_anchors_spatial"]
-
     # calculate the number of anchors of each feature layer.
-    num_anchors_per_layer = [depth*spatial for depth,spatial in zip(all_num_anchors_depth,all_num_anchors_spatial)]
+    num_anchors_per_layer = [depth * spatial for depth, spatial in zip(all_num_anchors_depth, all_num_anchors_spatial)]
+
+    # get and process input
+    num_groundtruth_boxes = labels['num_groundtruth_boxes']
+    groundtruth_classes = labels['groundtruth_classes']
+    groundtruth_boxes = labels['groundtruth_boxes']
+    original_image_spatial_shape = labels['original_image_spatial_shape']
+    true_image_shape = labels['true_image_shape']
+    # unpadding  num_boxes dimension for real num_groundtruth_boxes
+    groundtruth_classes_list = unpad_tensor(groundtruth_classes,num_groundtruth_boxes)
+    groundtruth_boxes_list = unpad_tensor(groundtruth_boxes,num_groundtruth_boxes)
 
     anchor_encoder_decoder = anchor_manipulator.AnchorEncoder(positive_threshold=params['positive_threshold'],
                                                               neg_threshold=params['neg_threshold'],
@@ -119,7 +232,6 @@ def ssd_model_fn(features, labels, mode, params):
     decode_fn = functools.partial(anchor_encoder_decoder.decode_all_anchors,
                                   all_anchors=all_anchors,
                                   num_anchors_per_layer=num_anchors_per_layer)
-
     # construct train example
     loc_targets_list, cls_targets_list, matched_iou_scores_list = [], [], []
     for _groundtruth_classes, _groundtruth_boxes in zip(groundtruth_classes_list,groundtruth_boxes_list):
@@ -139,221 +251,126 @@ def ssd_model_fn(features, labels, mode, params):
     # location_pred -> shape: [batch_size,num_all_anchors,4]
     cls_pred, location_pred = predict(features,mode,params,all_num_anchors_depth)
 
+    # decode boxes  这里可能有问题？ bboxes_pred 的所有anchors 是按照feature layer的顺序排列的
 
+    # bboxes_pred ->shape: [[batch_size,num_anchors_per_layrer,4],[][][][][]]
+    bboxes_pred = tf.map_fn(decode_fn, location_pred, dtype=[tf.float32] * len(num_anchors_per_layer), back_prop=False)
 
-    # cls_pred -> shape:[batch_size*num_all_anchors,21]
-    # location_pred -> shape:[batch_size*num_all_anchors,4]
-    cls_pred = tf.reshape(cls_pred, [-1, params['num_classes']])
-    location_pred = tf.reshape(location_pred, [-1, 4])
+    # bboxes_pred ->shape: [batch_size*num_anchors_per_layrer, 4]
+    bboxes_pred = [tf.reshape(preds, [-1, 4]) for preds in bboxes_pred]
 
-    with tf.device('/cpu:0'):
-        with tf.control_dependencies([cls_pred, location_pred]):
-            with tf.name_scope('post_forward'):
-                # decode predictions to a list which element has shape[(num_anchors_per_layer[0],4),(num_anchors_per_layer[1],4),...]
-                bboxes_pred = tf.map_fn(decode_fn,location_pred,dtype=[tf.float32] * len(num_anchors_per_layer), back_prop=False)
+    # bboxes_pred ->shape: [batch_size*num_all_anchros,4]
+    bboxes_pred = tf.concat(bboxes_pred, axis=0)
 
-                bboxes_pred = [tf.reshape(preds, [-1, 4]) for preds in bboxes_pred]
-                bboxes_pred = tf.concat(bboxes_pred, axis=0)
+    # calculate accuracy
+    with tf.control_dependencies([cls_pred, location_pred]):
+        with tf.name_scope('post_forward'):
+            # hard example mining
+            final_mask, positive_mask = hard_example_mining(cls_targets, cls_pred, params)
+            # flatten targets
+            flatten_cls_targets = tf.reshape(cls_targets, [-1])
+            flatten_loc_targets = tf.reshape(loc_targets, [-1, 4])
+            # flatten preds
+            flatten_cls_pred = tf.reshape(cls_pred, [-1, params['num_classes']])
+            flatten_location_pred = tf.reshape(location_pred, [-1, 4])
+            # apply hard_example_mining
+            flatten_cls_pred_hard_exam_mining = tf.boolean_mask(flatten_cls_pred, final_mask)
+            flatten_location_pred_hard_exam_mining = tf.boolean_mask(flatten_location_pred,
+                                                                     tf.stop_gradient(positive_mask))
+            flatten_cls_targets_hard_exam_mining = tf.boolean_mask(
+                tf.clip_by_value(flatten_cls_targets, 0, params['num_classes']),
+                final_mask)
+            flatten_loc_targets_hard_exam_mining = tf.stop_gradient(tf.boolean_mask(flatten_loc_targets, positive_mask))
 
-                # flaten for calculate accuracy
-                flaten_cls_targets = tf.reshape(cls_targets, [-1])
-                flaten_match_scores = tf.reshape(matched_iou_scores, [-1])
-                flaten_loc_targets = tf.reshape(loc_targets, [-1, 4])
+            # classification accuracy
+            cls_accuracy = tf.metrics.accuracy(flatten_cls_targets_hard_exam_mining,
+                                               tf.argmax(flatten_cls_pred_hard_exam_mining, axis=-1))
+            tf.identity(cls_accuracy[1], name='cls_accuracy')
+            tf.summary.scalar('cls_accuracy', cls_accuracy[1])
 
-                # hard negative mining for claculate loss
+            metrics = {'cls_accuracy': cls_accuracy}
 
-                # each positive examples has one label
-                # find all positive anchors
-                positive_mask = flaten_cls_targets > 0
-                n_positives = tf.count_nonzero(positive_mask)
-
-                # batch_n_positives：（batch,num_anchors） ?? cls_targets: -1 indicate ignore; 0 indicate background ;else
-                batch_n_positives = tf.count_nonzero(cls_targets, -1)
-                tf.identity(batch_n_positives[0],name="num_positives")
-
-                # tf.logical_and(tf.equal(cls_targets, 0), match_scores > 0.)
-                batch_negtive_mask = tf.equal(cls_targets,0)
-                batch_n_negtives = tf.count_nonzero(batch_negtive_mask, -1)
-
-                # number of negative anchors should be retained
-                batch_n_neg_select = tf.cast(params['negative_ratio'] * tf.cast(batch_n_positives, tf.float32),
-                                             tf.int32)
-                batch_n_neg_select = tf.minimum(batch_n_neg_select, tf.cast(batch_n_negtives, tf.int32))
-                tf.identity(batch_n_neg_select[0], name="num_negatives_select")
-
-                # hard negative mining for classification
-                predictions_for_bg = tf.nn.softmax(
-                    tf.reshape(cls_pred, [tf.shape(features)[0], -1, params['num_classes']]))[:, :, 0]
-                prob_for_negtives = tf.where(batch_negtive_mask,
-                                             0. - predictions_for_bg,
-                                             # ignore all the positives
-                                             0. - tf.ones_like(predictions_for_bg))
-
-                # choose top k negatives, which has high probability to be background
-                topk_prob_for_bg, _ = tf.nn.top_k(prob_for_negtives, k=tf.shape(prob_for_negtives)[1])
-
-                # shape:（batch,num_samples）
-                score_at_k = tf.gather_nd(topk_prob_for_bg,
-                                          tf.stack([tf.range(tf.shape(features)[0]), batch_n_neg_select - 1], axis=-1))
-                selected_neg_mask = prob_for_negtives >= tf.expand_dims(score_at_k, axis=-1)
-
-                # include both selected negtive and all positive examples
-                final_mask = tf.stop_gradient(
-                    tf.logical_or(tf.reshape(tf.logical_and(batch_negtive_mask, selected_neg_mask), [-1]),
-                                  positive_mask))
-                total_examples = tf.count_nonzero(final_mask)
-
-                # tensors used in loss calculation
-                cls_pred_after_hard_neg_mining = tf.boolean_mask(cls_pred, final_mask)
-                location_pred = tf.boolean_mask(location_pred, tf.stop_gradient(positive_mask))
-                flaten_cls_targets = tf.boolean_mask(tf.clip_by_value(flaten_cls_targets, 0, params['num_classes']),
-                                                     final_mask)
-                flaten_loc_targets = tf.stop_gradient(tf.boolean_mask(flaten_loc_targets, positive_mask))
-
-
-                cls_accuracy = tf.metrics.accuracy(flaten_cls_targets, tf.argmax(cls_pred_after_hard_neg_mining,axis=-1))
-                metrics = {'cls_accuracy': cls_accuracy}
-
-                # Create a tensor named train_accuracy for logging purposes.
-                tf.identity(cls_accuracy[1], name='cls_accuracy')
-                tf.summary.scalar('cls_accuracy', cls_accuracy[1])
-
-    # Calculate loss, which includes softmax cross entropy and L2 regularization.
-    # cross_entropy = tf.cond(n_positives > 0, lambda: tf.losses.sparse_softmax_cross_entropy(labels=flaten_cls_targets, logits=cls_pred), lambda: 0.)# * (params['negative_ratio'] + 1.)
-    # flaten_cls_targets=tf.Print(flaten_cls_targets, [flaten_loc_targets],summarize=50000)
-    cross_entropy = tf.losses.sparse_softmax_cross_entropy(labels=flaten_cls_targets, logits=cls_pred_after_hard_neg_mining) * (
-                params['negative_ratio'] + 1.)
-
-    # Create a tensor named cross_entropy for logging purposes.
-    tf.identity(cross_entropy, name='cross_entropy_loss')
-    tf.summary.scalar('cross_entropy_loss', cross_entropy)
-
-    # loc_loss = tf.cond(n_positives > 0, lambda: modified_smooth_l1(location_pred, tf.stop_gradient(flaten_loc_targets), sigma=1.), lambda: tf.zeros_like(location_pred))
-    loc_loss = modified_smooth_l1(location_pred, flaten_loc_targets, sigma=1.)
-
-    # loc_loss = modified_smooth_l1(location_pred, tf.stop_gradient(gtargets))
-    loc_loss = tf.reduce_mean(tf.reduce_sum(loc_loss, axis=-1), name='location_loss')
-    tf.summary.scalar('location_loss', loc_loss)
-    tf.losses.add_loss(loc_loss)
-
-    # loss for regularization
-    l2_loss_vars = []
-    for trainable_var in tf.trainable_variables():
-        if '_bn' not in trainable_var.name:
-            if 'conv4_3_scale' not in trainable_var.name:
-                l2_loss_vars.append(tf.nn.l2_loss(trainable_var))
-            else:
-                l2_loss_vars.append(tf.nn.l2_loss(trainable_var) * 0.1)
-
-    # Add weight decay to the loss. We exclude the batch norm variables because
-    # doing so leads to a small improvement in accuracy.
-    l2_loss = tf.multiply(params['weight_decay'], tf.add_n(l2_loss_vars), name='l2_loss')
-
-    # construct total loss
-    total_loss = tf.add(cross_entropy + loc_loss,l2_loss, name='total_loss')
+    cross_entropy, loc_loss, l2_loss = build_losses(cls_targets=flatten_cls_targets_hard_exam_mining,
+                                                    cls_pred=flatten_cls_pred_hard_exam_mining,
+                                                    loc_targets=flatten_loc_targets_hard_exam_mining,
+                                                    loc_pred=flatten_location_pred_hard_exam_mining,
+                                                    params=params)
+    total_loss = tf.add(cross_entropy, loc_loss, l2_loss, name='total_loss')
 
     if mode in (tf.estimator.ModeKeys.EVAL, tf.estimator.ModeKeys.PREDICT):
-        # add metrics
-        # visualization
-        # execute none maximum suppression
-        post_process_for_signle_example = lambda _cls_pred, _bboxes_pred: per_image_post_process(_cls_pred, _bboxes_pred,
-                                                          params['num_classes'], params['select_threshold'],
-                                                          params['min_size'],
-                                                          params['keep_topk'], params['nms_topk'], params['nms_threshold'])
+        with tf.name_scope("post_processing"):
+            post_process_for_signle_example = lambda _cls_pred, _bboxes_pred: per_image_post_process(_cls_pred, _bboxes_pred,
+                                                              params['num_classes'], params['select_threshold'],
+                                                              params['min_size'],
+                                                              params['keep_topk'], params['nms_topk'], params['nms_threshold'])
 
-        cls_pred_list, bboxes_pred_list = tf.unstack(tf.reshape(cls_pred,[tf.shape(features)[0],-1,params['num_classes']])), \
-                                          tf.unstack(tf.reshape(bboxes_pred,[tf.shape(features)[0],-1,4]))
+            cls_pred_list, bboxes_pred_list = tf.unstack(tf.reshape(cls_pred,[tf.shape(features)[0],-1,params['num_classes']])), \
+                                              tf.unstack(tf.reshape(bboxes_pred,[tf.shape(features)[0],-1,4]))
 
-        detection_boxes_list, detection_scores_list,detection_classes_list,num_detections_list= [],[],[],[]
-        max_detction_num = 100
-        for cls_pred_, bboxes_pred_ in zip(cls_pred_list,bboxes_pred_list):
-            # post_process func only proceess one image once a time
-            detection_boxes, detection_scores,detection_classes,\
-                         num_detections = post_process_for_signle_example(cls_pred_, bboxes_pred_)
+            detection_boxes_list, detection_scores_list,detection_classes_list,num_detections_list= [],[],[],[]
+            max_detction_num = 100
+            for cls_pred_, bboxes_pred_ in zip(cls_pred_list,bboxes_pred_list):
+                # post_process func only proceess one image once a time
+                detection_boxes, detection_scores,detection_classes,\
+                             num_detections = post_process_for_signle_example(cls_pred_, bboxes_pred_)
 
-            # padding along num_detections dimension
-            detection_boxes = pad_or_clip_nd(detection_boxes,[max_detction_num,4])
-            detection_scores = pad_or_clip_nd(detection_scores,[max_detction_num])
-            detection_classes= pad_or_clip_nd(detection_classes,[max_detction_num])
+                # padding along num_detections dimension
+                detection_boxes = pad_or_clip_nd(detection_boxes,[max_detction_num,4])
+                detection_scores = pad_or_clip_nd(detection_scores,[max_detction_num])
+                detection_classes= pad_or_clip_nd(detection_classes,[max_detction_num])
 
-            detection_boxes_list.append(detection_boxes)
-            detection_scores_list.append(detection_scores)
-            detection_classes_list.append(detection_classes)
-            num_detections_list.append(num_detections)
+                detection_boxes_list.append(detection_boxes)
+                detection_scores_list.append(detection_scores)
+                detection_classes_list.append(detection_classes)
+                num_detections_list.append(num_detections)
 
-        # batched detections
-        detection_boxes = tf.stack(detection_boxes_list,axis=0)
-        detection_scores = tf.stack(detection_scores_list,axis=0)
-        detection_classes = tf.stack(detection_classes_list,axis=0)
-        num_detections = tf.stack(num_detections_list,axis=0)
+            # batched detections
+            detection_boxes = tf.stack(detection_boxes_list,axis=0)
+            detection_scores = tf.stack(detection_scores_list,axis=0)
+            detection_classes = tf.stack(detection_classes_list,axis=0)
+            num_detections = tf.stack(num_detections_list,axis=0)
 
-        tf.identity(num_detections[0], name="num_detections_after_nms")
+            tf.identity(num_detections[0], name="num_detections_after_nms")
 
-        eval_dict = {
-            'original_image_spatial_shape': original_image_spatial_shape,
-            'true_image_shape':true_image_shape,
-            'original_image':labels['original_image'],
-            # goundtruths
-            'num_groundtruth_boxes_per_image': num_groundtruth_boxes,
-            'groundtruth_boxes': groundtruth_boxes,
-            'groundtruth_classes': groundtruth_classes,
-            # detections
-            'detection_boxes': detection_boxes,
-            'detection_scores': detection_scores,
-            'detection_classes': detection_classes,
-            "num_det_boxes_per_image": num_detections,
-            # image id
-            'key': labels["key"]
-        }
-        category_index = {id: {"id": id, "name": name} for (id, name) in VOC_LABELS.values()}
-        categories = category_index.values()
-        # visualize detected boxes
-        eval_metric_op_vis = visualization_utils.VisualizeSingleFrameDetections(
-            category_index,
-            max_examples_to_draw=params['max_examples_to_draw'],
-            max_boxes_to_draw=params['max_boxes_to_draw'],
-            min_score_thresh=params['min_score_thresh'],
-            use_normalized_coordinates=False)
-        vis_metric_ops = eval_metric_op_vis.get_estimator_eval_metric_ops(eval_dict)
-        metrics.update(vis_metric_ops)
+            eval_dict = {
+                'original_image_spatial_shape': original_image_spatial_shape,
+                'true_image_shape':true_image_shape,
+                'original_image':labels['original_image'],
+                # goundtruths
+                'num_groundtruth_boxes_per_image': num_groundtruth_boxes,
+                'groundtruth_boxes': groundtruth_boxes,
+                'groundtruth_classes': groundtruth_classes,
+                # detections
+                'detection_boxes': detection_boxes,
+                'detection_scores': detection_scores,
+                'detection_classes': detection_classes,
+                "num_det_boxes_per_image": num_detections,
+                # image id
+                'key': labels["key"]
+            }
+            category_index = {id: {"id": id, "name": name} for (id, name) in VOC_LABELS.values()}
+            categories = category_index.values()
+            # visualize detected boxes
+            eval_metric_op_vis = visualization_utils.VisualizeSingleFrameDetections(
+                category_index,
+                max_examples_to_draw=params['max_examples_to_draw'],
+                max_boxes_to_draw=params['max_boxes_to_draw'],
+                min_score_thresh=params['min_score_thresh'],
+                use_normalized_coordinates=False)
+            vis_metric_ops = eval_metric_op_vis.get_estimator_eval_metric_ops(eval_dict)
+            metrics.update(vis_metric_ops)
 
-        # dataset metrics ops
-        evaluator = eval_util.get_evaluators(categories,eval_metric_fn_key=params["eval_metric_fn_key"])
-        eval_metric_ops = evaluator.get_estimator_eval_metric_ops(eval_dict)
-        metrics.update(eval_metric_ops)
+            # dataset metrics ops
+            evaluator = eval_util.get_evaluators(categories,eval_metric_fn_key=params["eval_metric_fn_key"])
+            eval_metric_ops = evaluator.get_estimator_eval_metric_ops(eval_dict)
+            metrics.update(eval_metric_ops)
 
     if mode == tf.estimator.ModeKeys.TRAIN:
         # distillate knowledge
         if params["distillation"] == True:
-            with tf.variable_scope('distillation',values=[features]):
-                dist_backbone = ssd_net.VGG16Backbone(params['data_format'])
-                dist_feature_layers = dist_backbone.forward(features, training=(mode == tf.estimator.ModeKeys.TRAIN))
-                dist_location_pred, dist_cls_pred = ssd_net.multibox_head(dist_feature_layers, params['num_classes'],
-                                                                all_num_anchors_depth,
-                                                                data_format=params['data_format'])
-                if params['data_format'] == 'channels_first':
-                    dist_cls_pred = [tf.transpose(pred, [0, 2, 3, 1]) for pred in dist_cls_pred]
-                    dist_location_pred = [tf.transpose(pred, [0, 2, 3, 1]) for pred in dist_location_pred]
-                dist_cls_pred = [tf.reshape(pred, [tf.shape(features)[0], -1, params['num_classes']]) for pred in dist_cls_pred]
-                dist_location_pred = [tf.reshape(pred, [tf.shape(features)[0], -1, 4]) for pred in dist_location_pred]
-                dist_cls_pred = tf.concat(dist_cls_pred, axis=1)
-                dist_location_pred = tf.concat(dist_location_pred, axis=1)
-                dist_cls_pred = tf.reshape(dist_cls_pred, [-1, params['num_classes']])
-                dist_location_pred = tf.reshape(dist_location_pred, [-1, 4])
-                # class_distillation_loss
-                cls_logits = cls_pred[:,:params['cached_classes']+1] - tf.reduce_mean(cls_pred[:,:params['cached_classes']+1],axis=1,keep_dims=True)
-                cls_distillated_logits = dist_cls_pred[:,:params['cached_classes']+1] - tf.reduce_mean(dist_cls_pred[:,:params['cached_classes']+1],axis=1,keep_dims=True)
-                class_distillation_loss = tf.reduce_mean(tf.square(cls_logits-cls_distillated_logits),name='class_distillation_loss')
-                class_distillation_loss *= params.get('class_distillation_loss_coef',1)
-                tf.summary.scalar('class_distillation_loss', class_distillation_loss)
-
-                # 只惩罚那些negative的bboxes?
-                bboxes_distillation_loss = tf.reduce_mean(tf.reduce_mean(tf.square(location_pred-dist_location_pred),axis=1,keep_dims=True),name='bboxes_distillation_loss')
-                bboxes_distillation_loss *= params.get('bbox_distillation_loss_coef',1)
-                tf.summary.scalar('bboxes_distillation_loss', bboxes_distillation_loss)
-
-                total_loss =tf.add_n(total_loss,class_distillation_loss,bboxes_distillation_loss,name="total_loss_with_distillation")
-                tf.summary.scalar('total_loss_with_distillation',total_loss)
+            class_distillation_loss, bboxes_distillation_loss = build_distillation_loss(features,cls_pred,location_pred,mode,all_num_anchors_depth,params)
+            total_loss = tf.add_n(total_loss,class_distillation_loss,bboxes_distillation_loss,name="total_loss_with_distillation")
+            tf.summary.scalar('total_loss_with_distillation', total_loss)
 
         global_step = tf.train.get_or_create_global_step()
         # dynamic learning rate
@@ -385,4 +402,5 @@ def ssd_model_fn(features, labels, mode, params):
         loss=total_loss,
         train_op=train_op,
         eval_metric_ops=metrics,
-        scaffold=tf.train.Scaffold(init_fn=None))
+        scaffold=tf.train.Scaffold(init_fn=None)
+    )
