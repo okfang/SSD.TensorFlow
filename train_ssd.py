@@ -205,6 +205,7 @@ def main(_):
             'nms_topk': FLAGS.nms_topk,
             'keep_topk': FLAGS.keep_topk,
             'eval_metric_fn_key': "coco_detection_metrics",
+            'max_nms_detections' : 100,
             # visualize
             'max_examples_to_draw': FLAGS.max_examples_to_draw,
             'max_boxes_to_draw': FLAGS.max_boxes_to_draw,

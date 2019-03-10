@@ -203,16 +203,16 @@ class AnchorEncoder(object):
             # anchor_cy ->shape: [num_all_anchors,]
             anchor_cy, anchor_cx, anchor_h, anchor_w = all_anchors
             
-            # change predict offset to coordinate
+            # change predict offset to coordinate(loc_loss is too small ,_prior_scaling for scale loss)
             pred_h = tf.exp(pred_location[:, -2] * self._prior_scaling[2]) * anchor_h
             pred_w = tf.exp(pred_location[:, -1] * self._prior_scaling[3]) * anchor_w
             pred_cy = pred_location[:, 0] * self._prior_scaling[0] * anchor_h + anchor_cy
             pred_cx = pred_location[:, 1] * self._prior_scaling[1] * anchor_w + anchor_cx
             # pred_point -> shpep: [num_all_anchors,4]
-            pred_point = tf.stack(center2point(pred_cy, pred_cx, pred_h, pred_w),axis=-1)
+            bboxes_pred_per_image = tf.stack(center2point(pred_cy, pred_cx, pred_h, pred_w),axis=-1)
             # list [[num_anchors_per_layer,4],[][][][][]]
-            pred_point_per_layer_list = tf.split(pred_point, num_anchors_per_layer, axis=0)
-            return pred_point_per_layer_list
+            # pred_point_per_layer_list = tf.split(bboxes_pred_per_image, num_anchors_per_layer, axis=0)
+            return bboxes_pred_per_image
 
     def ext_decode_all_anchors(self, pred_location, all_anchors, all_num_anchors_depth, all_num_anchors_spatial):
         assert (len(all_num_anchors_depth)==len(all_num_anchors_spatial)) and (len(all_num_anchors_depth)==len(all_anchors)), 'inconsist num layers for anchors.'

@@ -1,18 +1,21 @@
 import tensorflow as tf
 
 def select_bboxes(scores_pred, bboxes_pred, num_classes, select_threshold):
+    """
+    :return:
+    selected_bboxes = {1:[num_all_anchors,4],2:[]}
+    selected_scores = {1:[num_all_anchors,]}
+    """
     selected_bboxes = {}
     selected_scores = {}
     with tf.name_scope('select_bboxes', [scores_pred, bboxes_pred]):
         for class_ind in range(1, num_classes):
-            # ************************1.找到每个类别对应的边框
+            # class_scores ->shape: [num_all_anchors,]
             class_scores = scores_pred[:, class_ind]
             select_mask = class_scores > select_threshold
-            # ************************2.把不对应的边框置为0
             select_mask = tf.cast(select_mask, tf.float32)
-            # 存储每个类别可能的边框
+            # choose anchors: unmatched anchors will be set 0
             selected_bboxes[class_ind] = tf.multiply(bboxes_pred, tf.expand_dims(select_mask, axis=-1))
-            # 存储每个类别，每个边框得到的分数
             selected_scores[class_ind] = tf.multiply(class_scores, select_mask)
 
     return selected_bboxes, selected_scores
@@ -33,9 +36,7 @@ def filter_bboxes(scores_pred, ymin, xmin, ymax, xmax, min_size, name):
     with tf.name_scope(name, 'filter_bboxes', [scores_pred, ymin, xmin, ymax, xmax]):
         width = xmax - xmin
         height = ymax - ymin
-
         filter_mask = tf.logical_and(width > min_size, height > min_size)
-
         filter_mask = tf.cast(filter_mask, tf.float32)
         return tf.multiply(ymin, filter_mask), tf.multiply(xmin, filter_mask), \
                 tf.multiply(ymax, filter_mask), tf.multiply(xmax, filter_mask), tf.multiply(scores_pred, filter_mask)
@@ -59,48 +60,68 @@ def nms_bboxes(scores_pred, bboxes_pred, nms_topk, nms_threshold, name):
         num_detections = tf.shape(idxes)[0]
         return tf.gather(scores_pred, idxes), tf.gather(bboxes_pred, idxes),num_detections
 
-def per_image_post_process(cls_pred, bboxes_pred, num_classes, select_threshold, min_size, keep_topk, nms_topk, nms_threshold):
+def per_image_post_process(cls_pred, bboxes_pred, num_classes=None, select_threshold=None, min_size=None, keep_topk=None, nms_topk=None, nms_threshold=None):
+    """
+    select boxes per image
+    :param cls_pred:  [num_all_anchors,21]
+    :param bboxes_pred: [num_all_anchors,4]
+    :param num_classes:  21
+    :param select_threshold:
+    :param min_size:
+    :param keep_topk:
+    :param nms_topk:
+    :param nms_threshold:
+    :return:
+        per_image_detection_boxes :  [num_selected_boxes,4]
+        per_image_detection_scores: [num_selected_boxes]
+        per_image_detection_classes: [num_selected_boxes]
+        per_image_total_detections: [num_selected_boxes]
+    """
     with tf.name_scope('select_bboxes', [cls_pred, bboxes_pred]):
         # calculate probability
         scores_pred = tf.nn.softmax(cls_pred)
-        # organize boxes by classs, return a dict: {"class_id":suitable_bboxes_tensor}
+        # selected_bboxes ->shape: {1:[num_all_anchors,4],2:[],...}
+        # selected_scores ->shape: {1:[num_all_anchors,],2:[],....}
         selected_bboxes, selected_scores = select_bboxes(scores_pred, bboxes_pred, num_classes, select_threshold)
 
         per_image_detection_boxes = []
         per_image_detection_classes = []
         per_image_detection_scores = []
-        per_image_total_detections = 0
-
+        each_classes_detections = []
         for class_ind in range(1, num_classes):
             ymin, xmin, ymax, xmax = tf.unstack(selected_bboxes[class_ind], 4, axis=-1)
-            #ymin, xmin, ymax, xmax = tf.split(selected_bboxes[class_ind], 4, axis=-1)
-            #ymin, xmin, ymax, xmax = tf.squeeze(ymin), tf.squeeze(xmin), tf.squeeze(ymax), tf.squeeze(xmax)
-
             # predicted boxes may be invalid
             ymin, xmin, ymax, xmax = clip_bboxes(ymin, xmin, ymax, xmax, 'clip_bboxes_{}'.format(class_ind))
-
             # filter boxes with too small size
             ymin, xmin, ymax, xmax, selected_scores[class_ind] = filter_bboxes(selected_scores[class_ind],
                                                 ymin, xmin, ymax, xmax, min_size, 'filter_bboxes_{}'.format(class_ind))
 
-            # sort bboxes to choose candidate boxes for nms()
+            # sort bboxes to choose candidate boxes
+            # ymin ->shape: [num_all_anchors, keep_topk]   have top_k score
             ymin, xmin, ymax, xmax, selected_scores[class_ind] = sort_bboxes(selected_scores[class_ind],
                                                 ymin, xmin, ymax, xmax, keep_topk, 'sort_bboxes_{}'.format(class_ind))
-
             selected_bboxes[class_ind] = tf.stack([ymin, xmin, ymax, xmax], axis=-1)
 
             # execute nms to get the final boxes(  max num detections for each class)
-            detection_score, detection_boxes,num_detection= nms_bboxes(selected_scores[class_ind], selected_bboxes[class_ind], nms_topk, nms_threshold, 'nms_bboxes_{}'.format(class_ind))
-
+            detection_score, detection_boxes,num_detections = nms_bboxes(selected_scores[class_ind], selected_bboxes[class_ind], nms_topk, nms_threshold, 'nms_bboxes_{}'.format(class_ind))
             # collect all detections from one image
             per_image_detection_boxes.append(detection_boxes)
             per_image_detection_scores.append(detection_score)
             per_image_detection_classes.append(tf.zeros_like(detection_score)+class_ind)
-            per_image_total_detections += num_detection
+            each_classes_detections.append(num_detections)
 
+        # concat all classes
         per_image_detection_boxes = tf.concat(per_image_detection_boxes,axis=0)
         per_image_detection_scores = tf.concat(per_image_detection_scores,axis=0)
         per_image_detection_classes = tf.concat(per_image_detection_classes,axis=0)
 
-        return per_image_detection_boxes, per_image_detection_scores,per_image_detection_classes,per_image_total_detections
+        # sort all detections
+        per_image_detection_scores, ind = tf.nn.top_k(per_image_detection_scores,
+                                                      k=tf.shape(per_image_detection_scores))
+        per_image_detection_boxes = tf.gather(per_image_detection_boxes, ind)
+        per_image_detection_classes = tf.gather(per_image_detection_classes, ind)
+
+        per_image_total_detections = tf.shape(per_image_detection_scores)[0]
+
+        return per_image_detection_boxes, per_image_detection_scores,per_image_detection_classes, per_image_total_detections
 
