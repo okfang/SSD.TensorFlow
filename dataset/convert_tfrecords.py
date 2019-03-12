@@ -44,13 +44,13 @@ import dataset_common
        |    |->Annotations/
        |    |->...
 '''
-tf.app.flags.DEFINE_string('dataset_directory', '/home/dxfang/dataset/pascal_voc',
+tf.app.flags.DEFINE_string('dataset_directory', 'F:\\dataset\\PASCALVOC',
                            'All datas directory')
 tf.app.flags.DEFINE_string('train_splits', 'voc2007_train, voc2012_train',
                            'Comma-separated list of the training data sub-directory')
 tf.app.flags.DEFINE_string('validation_splits', 'voc2007_test',
                            'Comma-separated list of the validation data sub-directory')
-tf.app.flags.DEFINE_string('output_directory', '/home/dxfang/dataset/tfrecords/pascal_voc/',
+tf.app.flags.DEFINE_string('output_directory', 'F:\\dataset\\PASCALVOC\\tfrecords\\pascal_voc\\',
                            'Output data directory')
 tf.app.flags.DEFINE_integer('train_shards', 16,
                             'Number of shards in training TFRecord files.')
@@ -89,7 +89,7 @@ def _bytes_feature(value):
   return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
 
 def _convert_to_example(filename, image_name, image_buffer, bboxes, labels, labels_text,
-                        difficult, truncated, height, width,key):
+                        difficult, truncated, height, width, key):
   """Build an Example proto for an example.
 
   Args:
@@ -299,7 +299,7 @@ def _process_image_files_batch(coder, thread_index, ranges, name, directory, all
       key = hashlib.sha256(image_buffer).hexdigest()
 
       example = _convert_to_example(filename, cur_record[1], image_buffer, bboxes, labels, labels_text,
-                                    difficult, truncated, height, width,key)
+                                    difficult, truncated, height, width, key)
       writer.write(example.SerializeToString())
       shard_counter += 1
       counter += 1
@@ -391,7 +391,7 @@ def main(unused_argv):
   print('Saving results to %s' % FLAGS.output_directory)
 
   # Run it!
-  _process_dataset('val', FLAGS.dataset_directory, parse_comma_list(FLAGS.validation_splits), FLAGS.validation_shards)
+  # _process_dataset('val', FLAGS.dataset_directory, parse_comma_list(FLAGS.validation_splits), FLAGS.validation_shards)
   _process_dataset('train', FLAGS.dataset_directory, parse_comma_list(FLAGS.train_splits), FLAGS.train_shards)
 
 if __name__ == '__main__':

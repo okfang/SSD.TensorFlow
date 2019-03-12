@@ -242,6 +242,7 @@ class CocoDetectionEvaluator(object_detection_evaluation.DetectionEvaluator):
         is_annotated_batched):
       """Update operation for adding batch of images to Coco evaluator."""
 
+
       for (image_id, gt_box, gt_class, gt_is_crowd, num_gt_box, det_box,
            det_score, det_class, num_det_box, is_annotated) in zip(
                image_id_batched, groundtruth_boxes_batched,

@@ -905,8 +905,9 @@ class EvalMetricOpsVisualization(object):
           lambda: tf.constant(''))
 
     update_op = tf.py_func(self.add_images, [[images[0]]], [])
-    image_tensors = tf.py_func(
-        get_images, [], [tf.uint8] * self._max_examples_to_draw)
+
+    image_tensors = tf.py_func(get_images, [], [tf.uint8] * self._max_examples_to_draw)
+
     eval_metric_ops = {}
     for i, image in enumerate(image_tensors):
       summary_name = self._summary_name_prefix + '/' + str(i)

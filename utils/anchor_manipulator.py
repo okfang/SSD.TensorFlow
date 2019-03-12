@@ -330,7 +330,7 @@ class AnchorCreator(object):
             tiled_allowed_borders = []
             for y_on_image,x_on_image,list_h_on_image,list_w_on_image in all_anchors:
                 # expand dims for broadcast [feature_map_size, feature_map_size,1]
-                y_on_image, x_on_image = tf.expand_dims(y_on_image,axis=-1), tf.expand_dims(x_on_image)
+                y_on_image, x_on_image = tf.expand_dims(y_on_image,axis=-1), tf.expand_dims(x_on_image,axis=-1)
 
                 # anchors_ymin_ -> shape: [feature_map_size, feature_map_size, num_anchors_per_position]
                 anchors_ymin_, anchors_xmin_, anchors_ymax_, anchors_xmax_ = center2point(y_on_image,x_on_image,list_h_on_image,list_w_on_image)

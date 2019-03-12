@@ -117,7 +117,7 @@ def per_image_post_process(cls_pred, bboxes_pred, num_classes=None, select_thres
 
         # sort all detections
         per_image_detection_scores, ind = tf.nn.top_k(per_image_detection_scores,
-                                                      k=tf.shape(per_image_detection_scores))
+                                                      k=tf.shape(per_image_detection_scores)[0])
         per_image_detection_boxes = tf.gather(per_image_detection_boxes, ind)
         per_image_detection_classes = tf.gather(per_image_detection_classes, ind)
 

@@ -17,6 +17,8 @@ from __future__ import division
 from __future__ import print_function
 
 import os
+import sys
+import time
 
 import tensorflow as tf
 
@@ -28,7 +30,7 @@ from utils import scaffolds
 from inputs import input_pipeline
 
 tf.app.flags.DEFINE_integer(
-    'num_readers', 8,
+    'num_readers', 2,
     'The number of parallel readers that read data from the dataset.')
 tf.app.flags.DEFINE_integer(
     'num_preprocessing_threads', 24,
@@ -45,13 +47,13 @@ tf.app.flags.DEFINE_string(
 tf.app.flags.DEFINE_integer(
     'num_classes', 21, 'Number of classes to use in the dataset.')
 tf.app.flags.DEFINE_string(
-    'model_dir', './logs/',
+    'model_dir', './logs',
     'The directory where the model will be stored.')
 tf.app.flags.DEFINE_integer(
     'log_every_n_steps',10,
     'The frequency with which logs are printed.')
 tf.app.flags.DEFINE_integer(
-    'save_summary_steps', 100,
+    'save_summary_steps', 20,
     'The frequency with which summaries are saved, in seconds.')
 tf.app.flags.DEFINE_integer(
     'save_checkpoints_secs', None,
@@ -136,9 +138,9 @@ tf.app.flags.DEFINE_integer(
 tf.app.flags.DEFINE_integer(
     'max_examples_to_draw', 20, 'Number of image to draw while eval.')
 tf.app.flags.DEFINE_integer(
-    'max_boxes_to_draw', 50, 'Number of bbox to draw per image while eval.')
-tf.app.flags.DEFINE_integer(
-    'min_score_thresh', 20, 'min score of bbox to draw')
+    'max_boxes_to_draw',5, 'Number of bbox to draw per image while eval.')
+tf.app.flags.DEFINE_float(
+    'min_score_thresh',0.2, 'min score of bbox to draw')
 
 # distillation configuration
 tf.app.flags.DEFINE_integer(
@@ -171,17 +173,19 @@ def main(_):
     # Set up a RunConfig to only save checkpoints once per training cycle.
     run_config = tf.estimator.RunConfig().replace(
         save_checkpoints_secs=FLAGS.save_checkpoints_secs).replace(
-        save_checkpoints_steps=10).replace(
+        save_checkpoints_steps=500).replace(
         save_summary_steps=FLAGS.save_summary_steps).replace(
         keep_checkpoint_max=5).replace(
         tf_random_seed=FLAGS.tf_random_seed).replace(
-        log_step_count_steps=FLAGS.log_every_n_steps).replace(
+        log_step_count_steps=FLAGS.log_every_n_steps)\
+        .replace(
         train_distribute=distribute_strategy
     )
 
-    # replicate_ssd_model_fn = tf.contrib.estimator.replicate_model_fn(ssd_model_fn, loss_reduction=tf.losses.Reduction.MEAN)
+    # replicate_ssd_model_fn =
+    save_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
     ssd_detector = tf.estimator.Estimator(
-        model_fn=ssd_model_fn, model_dir=FLAGS.model_dir, config=run_config,
+        model_fn=ssd_model_fn, model_dir=os.path.join(FLAGS.model_dir,'2019-03-12-16-08-41'), config=run_config,
         params={
             # training
             'num_gpus': 2,
@@ -205,7 +209,7 @@ def main(_):
             'nms_topk': FLAGS.nms_topk,
             'keep_topk': FLAGS.keep_topk,
             'eval_metric_fn_key': "coco_detection_metrics",
-            'max_nms_detections' : 100,
+            'pad_nms_detections': 100,
             # visualize
             'max_examples_to_draw': FLAGS.max_examples_to_draw,
             'max_boxes_to_draw': FLAGS.max_boxes_to_draw,
@@ -222,8 +226,8 @@ def main(_):
         'loss': 'total_loss',
         'l2': 'l2_loss',
         'acc': 'post_forward/cls_accuracy',
-        'num_positives':'post_forward/num_positives',
-        'num_negatives_selected':'post_forward/num_negatives_select'
+        'num_positives': 'post_forward/hard_example_mining/num_positives',
+        'num_negatives_selected': 'post_forward/hard_example_mining/num_negatives_select'
     }
     train_logging_hook = tf.train.LoggingTensorHook(tensors=train_tensors_to_log, every_n_iter=FLAGS.log_every_n_steps,
                                               formatter = lambda dicts: (', '.join(['%s=%.6f' % (k, v) for k, v in dicts.items()])))
@@ -233,9 +237,9 @@ def main(_):
         'loss': 'total_loss',
         'l2': 'l2_loss',
         'acc': 'post_forward/cls_accuracy',
-        'num_positives': 'post_forward/num_positives',
-        'num_negatives_selected': 'post_forward/num_negatives_select',
-        'num_detections_after_nms': 'num_detections_after_nms'
+        'num_positives': 'post_forward/hard_example_mining/num_positives',
+        'num_negatives_selected': 'post_forward/hard_example_mining/num_negatives_select',
+        'num_detections_after_nms': 'post_processing/num_detections_after_nms'
     }
     eval_logging_hook = tf.train.LoggingTensorHook(tensors=eval_tensors_to_log, every_n_iter=FLAGS.log_every_n_steps,
                                                    formatter=lambda dicts: (', '.join(['%s=%.6f' % (k, v) for k, v in dicts.items()])))
@@ -250,16 +254,17 @@ def main(_):
         hooks= [train_logging_hook]
     )
     eval_spec = tf.estimator.EvalSpec(
-        input_fn=input_pipeline(file_pattern=eval_input_pattern, is_training=False, batch_size=FLAGS.batch_size),
-        hooks=[eval_logging_hook]
+        input_fn=input_pipeline(file_pattern=eval_input_pattern, is_training=False, batch_size=FLAGS.batch_size,num_readers=1),
+        hooks=[eval_logging_hook],
+        steps=20,
     )
 
     tf.estimator.train_and_evaluate(ssd_detector,train_spec,eval_spec)
 
     # ssd_detector.evaluate(input_fn=input_pipeline(file_pattern=eval_input_pattern,
     #                                               is_training=False,
-    #                                               batch_size=FLAGS.batch_size),
-    #                       steps=20,
+    #                                               batch_size=FLAGS.batch_size,
+    #                                               num_readers=1),
     #                       hooks=[eval_logging_hook])
 
     # distillation

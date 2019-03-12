@@ -11,7 +11,7 @@ from utils.shape_util import pad_or_clip_nd
 slim = tf.contrib.slim
 
 
-def read_dataset(file_read_func, file_pattern,num_readers=4):
+def read_dataset(file_read_func, file_pattern,is_training=True,num_readers=2):
     """
     读取tfrecord文件，并构造dataset
     """
@@ -24,7 +24,8 @@ def read_dataset(file_read_func, file_pattern,num_readers=4):
     if num_readers > 1:
         tf.logging.warning('`shuffle` is false, but the input data stream is '
                            'still slightly shuffled since `num_readers` > 1.')
-    filename_dataset = filename_dataset.repeat()
+    if is_training:
+        filename_dataset = filename_dataset.repeat()
     records_dataset = filename_dataset.apply(
         tf.contrib.data.parallel_interleave(
             file_read_func,
@@ -32,7 +33,7 @@ def read_dataset(file_read_func, file_pattern,num_readers=4):
     return records_dataset
 
 
-def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size=32,image_preprocessing_fn=None):
+def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size=32,image_preprocessing_fn=None,num_readers=2):
 
     # Features in Pascal VOC TFRecords.
     keys_to_features = {
@@ -43,7 +44,7 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
         'image/height': tf.FixedLenFeature([1], tf.int64),
         'image/width': tf.FixedLenFeature([1], tf.int64),
         'image/channels': tf.FixedLenFeature([1], tf.int64),
-        'image/shape': tf.FixedLenFeature([3], tf.int32),
+        'image/shape': tf.FixedLenFeature([3], tf.int64),
         'image/object/bbox/xmin': tf.VarLenFeature(dtype=tf.float32),
         'image/object/bbox/ymin': tf.VarLenFeature(dtype=tf.float32),
         'image/object/bbox/xmax': tf.VarLenFeature(dtype=tf.float32),
@@ -111,10 +112,10 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
         groundtruth_classes = pad_or_clip_nd(groundtruth_classes,output_shape = [max_num_bboxes])
         groundtruth_boxes = pad_or_clip_nd(groundtruth_boxes,output_shape = [max_num_bboxes,4])
         # [3]
-        true_image_shape = tf.shape(preprocessed_image)
+        true_image_shape = tf.cast(tf.shape(preprocessed_image),dtype=tf.int32)
 
         # [2]
-        original_image_spatial_shape = tensor_dict['shape'][:2]
+        original_image_spatial_shape = tf.cast(tensor_dict['shape'][:2],dtype=tf.int32)
         # [300,300,]
         features = preprocessed_image
 
@@ -131,12 +132,13 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
         return features, labels
 
     # 读取dataset
-    dataset = read_dataset(
-        functools.partial(tf.data.TFRecordDataset, buffer_size=8 * 1000 * 1000),file_pattern)
+    dataset = read_dataset(functools.partial(tf.data.TFRecordDataset, buffer_size=8 * 1000 * 1000),
+                           file_pattern,
+                           is_training=is_training,
+                           num_readers=num_readers)
 
     # 预处理
-    dataset = dataset.map(process_fn,num_parallel_calls=batch_size*2)
+    dataset = dataset.map(process_fn,num_parallel_calls=batch_size)
     dataset = dataset.batch(batch_size=batch_size, drop_remainder=True)
     dataset = dataset.prefetch(buffer_size=None)
-
     return dataset

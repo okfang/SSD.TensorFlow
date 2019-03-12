@@ -253,7 +253,7 @@ def ssd_model_fn(features, labels, mode, params):
     # decode boxes  这里可能有问题？ bboxes_pred 的所有anchors 是按照feature layer的顺序排列的
 
     # bboxes_pred ->shape: [[batch_size,num_all_anchors,4],[][][][][]]
-    bboxes_pred = tf.map_fn(decode_fn, location_pred, dtype=[tf.float32] * len(num_anchors_per_layer), back_prop=False)
+    bboxes_pred = tf.map_fn(decode_fn, location_pred, back_prop=False)
 
     # calculate accuracy
     with tf.control_dependencies([cls_pred, location_pred]):
@@ -282,22 +282,22 @@ def ssd_model_fn(features, labels, mode, params):
             tf.summary.scalar('cls_accuracy', cls_accuracy[1])
 
             metrics = {'cls_accuracy': cls_accuracy}
-
+    # losses
     cross_entropy, loc_loss, l2_loss = build_losses(cls_targets=flatten_cls_targets_hard_exam_mining,
                                                     cls_pred=flatten_cls_pred_hard_exam_mining,
                                                     loc_targets=flatten_loc_targets_hard_exam_mining,
                                                     loc_pred=flatten_location_pred_hard_exam_mining,
                                                     params=params)
-    total_loss = tf.add(cross_entropy, loc_loss, l2_loss, name='total_loss')
+    total_loss = tf.add_n([cross_entropy, loc_loss, l2_loss], name='total_loss')
 
     if mode in (tf.estimator.ModeKeys.EVAL, tf.estimator.ModeKeys.PREDICT):
         with tf.name_scope("post_processing"):
-            post_process_for_single_example = functools.partial(per_image_post_process(num_classes=params['num_classes'],
+            post_process_for_single_example = functools.partial(per_image_post_process,num_classes=params['num_classes'],
                                                                                        select_threshold=params['select_threshold'],
                                                                                        min_size=params['min_size'],
                                                                                        keep_topk=params['keep_topk'],
                                                                                        nms_topk=params['nms_topk'],
-                                                                                       nms_threshold=params['nms_threshold']))
+                                                                                       nms_threshold=params['nms_threshold'])
 
             cls_pred_list = tf.unstack(cls_pred)
             bboxes_pred_list = tf.unstack(bboxes_pred)
@@ -310,9 +310,9 @@ def ssd_model_fn(features, labels, mode, params):
                              num_detections = post_process_for_single_example(cls_pred_, bboxes_pred_)
 
                 # padding along num_detections dimension
-                detection_boxes = pad_or_clip_nd(detection_boxes, [params['max_nms_detections'],4])
-                detection_scores = pad_or_clip_nd(detection_scores, [params['max_nms_detections']])
-                detection_classes = pad_or_clip_nd(detection_classes, [params['max_nms_detections']])
+                detection_boxes = pad_or_clip_nd(detection_boxes, [params['pad_nms_detections'],4])
+                detection_scores = pad_or_clip_nd(detection_scores, [params['pad_nms_detections']])
+                detection_classes = pad_or_clip_nd(detection_classes, [params['pad_nms_detections']])
 
                 detection_boxes_list.append(detection_boxes)
                 detection_scores_list.append(detection_scores)
@@ -322,7 +322,7 @@ def ssd_model_fn(features, labels, mode, params):
             # batched detections
             # detection_boxes -> shape: [batch_size,max_nms_detections，4]
             # detection_scores -> shape: [batch_size,max_nms_detections，]
-            # detection_classes -> shape: [batch_size,max_nms_detections，]   labels 1,2,...21
+            # detection_classes -> shape: [batch_size,max_nms_detections，]   labels: 1,2,...21
             detection_boxes = tf.stack(detection_boxes_list,axis=0)
             detection_scores = tf.stack(detection_scores_list,axis=0)
             detection_classes = tf.stack(detection_classes_list,axis=0)
@@ -346,8 +346,9 @@ def ssd_model_fn(features, labels, mode, params):
                 # image id
                 'key': labels["key"]
             }
+
             category_index = {VOC_LABELS[name][0]: {"id": VOC_LABELS[name][0], "name": name} for name in VOC_LABELS.keys()}
-            categories = category_index.values()
+            categories = list(category_index.values())
             # visualization detections result
             eval_metric_op_vis = visualization_utils.VisualizeSingleFrameDetections(
                 category_index,
