@@ -509,10 +509,11 @@ def draw_side_by_side_evaluation_image(eval_dict,
         true_image_shape=tf.expand_dims(
             eval_dict['true_image_shape'][indx], axis=0),
         max_boxes_to_draw=None,
-        min_score_thresh=0.0,
+        min_score_thresh=0.2,
         use_normalized_coordinates=use_normalized_coordinates)
     images_with_detections_list.append(
         tf.concat([images_with_detections, images_with_groundtruth], axis=2))
+    # images_with_detections_list.append(images_with_groundtruth)
   return images_with_detections_list
 
 

@@ -12,7 +12,6 @@ from utils.shape_util import pad_or_clip_nd, unpad_tensor
 global_anchor_info = inputs.global_anchor_info
 
 VOC_LABELS = {
-    'none': (0, 'Background'),
     'aeroplane': (1, 'Vehicle'),
     'bicycle': (2, 'Vehicle'),
     'bird': (3, 'Animal'),
@@ -215,8 +214,8 @@ def ssd_model_fn(features, labels, mode, params):
     original_image_spatial_shape = labels['original_image_spatial_shape']
     true_image_shape = labels['true_image_shape']
     # unpadding  num_boxes dimension for real num_groundtruth_boxes
-    groundtruth_classes_list = unpad_tensor(groundtruth_classes,num_groundtruth_boxes)
-    groundtruth_boxes_list = unpad_tensor(groundtruth_boxes,num_groundtruth_boxes)
+    unpaded_groundtruth_classes = unpad_tensor(groundtruth_classes,num_groundtruth_boxes)
+    unpaded_groundtruth_boxes = unpad_tensor(groundtruth_boxes,num_groundtruth_boxes)
 
     anchor_encoder_decoder = anchor_manipulator.AnchorEncoder(positive_threshold=params['positive_threshold'],
                                                               neg_threshold=params['neg_threshold'],
@@ -234,7 +233,7 @@ def ssd_model_fn(features, labels, mode, params):
                                   num_anchors_per_layer=num_anchors_per_layer)
     # construct train example
     loc_targets_list, cls_targets_list, matched_iou_scores_list = [], [], []
-    for _groundtruth_classes, _groundtruth_boxes in zip(groundtruth_classes_list,groundtruth_boxes_list):
+    for _groundtruth_classes, _groundtruth_boxes in zip(unpaded_groundtruth_classes,unpaded_groundtruth_boxes):
         loc_target, cls_target, matched_iou_score = anchor_encoder_fn(labels=_groundtruth_classes, bboxes=_groundtruth_boxes)
         loc_targets_list.append(loc_target)
         cls_targets_list.append(cls_target)
@@ -325,8 +324,8 @@ def ssd_model_fn(features, labels, mode, params):
             # detection_classes -> shape: [batch_size,max_nms_detections，]   labels: 1,2,...21
             detection_boxes = tf.stack(detection_boxes_list,axis=0)
             detection_scores = tf.stack(detection_scores_list,axis=0)
-            detection_classes = tf.stack(detection_classes_list,axis=0)
-            num_detections = tf.stack(num_detections_list,axis=0)
+            detection_classes = tf.cast(tf.stack(detection_classes_list,axis=0),tf.int32)
+            num_detections = tf.cast(tf.stack(num_detections_list,axis=0),tf.int32)
 
             tf.identity(num_detections[0], name="num_detections_after_nms")
 
@@ -336,8 +335,8 @@ def ssd_model_fn(features, labels, mode, params):
                 'original_image':labels['original_image'],
                 # goundtruths
                 'num_groundtruth_boxes_per_image': num_groundtruth_boxes,
-                'groundtruth_boxes': groundtruth_boxes,
-                'groundtruth_classes': groundtruth_classes,
+                'groundtruth_boxes': unpaded_groundtruth_boxes,
+                'groundtruth_classes': unpaded_groundtruth_classes,
                 # detections
                 'detection_boxes': detection_boxes,
                 'detection_scores': detection_scores,
@@ -355,10 +354,12 @@ def ssd_model_fn(features, labels, mode, params):
                 max_examples_to_draw=params['max_examples_to_draw'],
                 max_boxes_to_draw=params['max_boxes_to_draw'],
                 min_score_thresh=params['min_score_thresh'],
-                use_normalized_coordinates=False)
+                use_normalized_coordinates=True)
             vis_metric_ops = eval_metric_op_vis.get_estimator_eval_metric_ops(eval_input_dict)
             metrics.update(vis_metric_ops)
 
+            eval_input_dict['groundtruth_boxes'] = groundtruth_boxes
+            eval_input_dict['groundtruth_classes'] = groundtruth_classes
             # eval metrics ops
             evaluator = eval_util.get_evaluators(categories,eval_metric_fn_key=params["eval_metric_fn_key"])
             eval_metric_ops = evaluator.get_estimator_eval_metric_ops(eval_input_dict)

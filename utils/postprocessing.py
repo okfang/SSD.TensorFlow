@@ -107,7 +107,7 @@ def per_image_post_process(cls_pred, bboxes_pred, num_classes=None, select_thres
             # collect all detections from one image
             per_image_detection_boxes.append(detection_boxes)
             per_image_detection_scores.append(detection_score)
-            per_image_detection_classes.append(tf.zeros_like(detection_score)+class_ind)
+            per_image_detection_classes.append(tf.zeros_like(detection_score,dtype=tf.int32)+class_ind)
             each_classes_detections.append(num_detections)
 
         # concat all classes

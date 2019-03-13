@@ -11,7 +11,7 @@ from utils.shape_util import pad_or_clip_nd
 slim = tf.contrib.slim
 
 
-def read_dataset(file_read_func, file_pattern,is_training=True,num_readers=2):
+def read_dataset(file_read_func, file_pattern,is_training=True, num_readers=2):
     """
     读取tfrecord文件，并构造dataset
     """
@@ -33,7 +33,7 @@ def read_dataset(file_read_func, file_pattern,is_training=True,num_readers=2):
     return records_dataset
 
 
-def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size=32,image_preprocessing_fn=None,num_readers=2):
+def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size=32,image_preprocessing_fn=None,num_readers=2,data_format="channels_first",):
 
     # Features in Pascal VOC TFRecords.
     keys_to_features = {
@@ -100,9 +100,9 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
 
         # Pre-processing image, labels and bboxes.
         if is_training:
-            preprocessed_image, groundtruth_classes, groundtruth_boxes = image_preprocessing_fn(original_image, glabels_raw, gbboxes_raw)
+            preprocessed_image, groundtruth_classes, groundtruth_boxes,true_image_shape = image_preprocessing_fn(original_image, glabels_raw, gbboxes_raw)
         else:
-            image_before_normalization, preprocessed_image = image_preprocessing_fn(original_image, glabels_raw, gbboxes_raw)
+            image_before_normalization, preprocessed_image,true_image_shape = image_preprocessing_fn(original_image, glabels_raw, gbboxes_raw)
             groundtruth_classes, groundtruth_boxes = glabels_raw, gbboxes_raw
 
         num_groundtruth_boxes = tf.shape(groundtruth_boxes)[0]
@@ -112,7 +112,9 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
         groundtruth_classes = pad_or_clip_nd(groundtruth_classes,output_shape = [max_num_bboxes])
         groundtruth_boxes = pad_or_clip_nd(groundtruth_boxes,output_shape = [max_num_bboxes,4])
         # [3]
-        true_image_shape = tf.cast(tf.shape(preprocessed_image),dtype=tf.int32)
+        # true_image_shape = tf.cast(tf.shape(preprocessed_image),dtype=tf.int32)
+        # if data_format == 'channels_first':
+        #     true_image_shape = tf.gather(true_image_shape, [1,2,0])
 
         # [2]
         original_image_spatial_shape = tf.cast(tensor_dict['shape'][:2],dtype=tf.int32)

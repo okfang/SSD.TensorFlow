@@ -467,9 +467,10 @@ def preprocess_for_train(image, labels, bboxes, out_shape, data_format='channels
     if not output_rgb:
       image_channels = tf.unstack(final_image, axis=-1, name='split_rgb')
       final_image = tf.stack([image_channels[2], image_channels[1], image_channels[0]], axis=-1, name='merge_bgr')
+    true_image_shape = tf.shape(final_image)
     if data_format == 'channels_first':
       final_image = tf.transpose(final_image, perm=(2, 0, 1))
-    return final_image, labels, bboxes
+    return final_image, labels, bboxes,true_image_shape
 
 def preprocess_for_eval(image, out_shape, data_format='channels_first', scope='ssd_preprocessing_eval', output_rgb=True):
   """Preprocesses the given image for evaluation.
@@ -491,9 +492,10 @@ def preprocess_for_eval(image, out_shape, data_format='channels_first', scope='s
       image_channels = tf.unstack(image, axis=-1, name='split_rgb')
       image = tf.stack([image_channels[2], image_channels[1], image_channels[0]], axis=-1, name='merge_bgr')
     # Image data format.
+    true_image_shape = tf.shape(image)
     if data_format == 'channels_first':
       image = tf.transpose(image, perm=(2, 0, 1))
-    return image_before_normalization, image
+    return image_before_normalization, image,true_image_shape
 
 def preprocess_image(image, labels, bboxes, out_shape, is_training=False, data_format='channels_first', output_rgb=True):
   """Preprocesses the given image.

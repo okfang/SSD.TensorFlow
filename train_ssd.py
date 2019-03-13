@@ -136,7 +136,7 @@ tf.app.flags.DEFINE_integer(
 
 # visualization realted configuration
 tf.app.flags.DEFINE_integer(
-    'max_examples_to_draw', 20, 'Number of image to draw while eval.')
+    'max_examples_to_draw', 10, 'Number of image to draw while eval.')
 tf.app.flags.DEFINE_integer(
     'max_boxes_to_draw',5, 'Number of bbox to draw per image while eval.')
 tf.app.flags.DEFINE_float(
@@ -256,7 +256,7 @@ def main(_):
     eval_spec = tf.estimator.EvalSpec(
         input_fn=input_pipeline(file_pattern=eval_input_pattern, is_training=False, batch_size=FLAGS.batch_size,num_readers=1),
         hooks=[eval_logging_hook],
-        steps=20,
+        steps=10,
     )
 
     tf.estimator.train_and_evaluate(ssd_detector,train_spec,eval_spec)
@@ -265,7 +265,8 @@ def main(_):
     #                                               is_training=False,
     #                                               batch_size=FLAGS.batch_size,
     #                                               num_readers=1),
-    #                       hooks=[eval_logging_hook])
+    #                       hooks=[eval_logging_hook],
+    #                       steps=18)
 
     # distillation
     # class_for_use = range(1,FLAGS.step1_classes+1)
