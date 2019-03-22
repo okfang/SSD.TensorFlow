@@ -16,7 +16,6 @@ def read_dataset(file_read_func, file_pattern,is_training=True, num_readers=2):
     读取tfrecord文件，并构造dataset
     """
     filenames = tf.gfile.Glob(file_pattern)
-    # 答应文件是否齐全
     # print("------------check files-------------")
     # for filename in filenames:
     #     print(filename)

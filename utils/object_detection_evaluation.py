@@ -695,7 +695,8 @@ class ObjectDetectionEvaluation(object):
 
             self.precisions_per_class[class_index] = precision
             self.recalls_per_class[class_index] = recall
-            average_precision = metrics.compute_average_precision(precision, recall)
+            # average_precision = metrics.compute_average_precision(precision, recall)
+            average_precision = metrics.compute_voc_07_metrics(precision, recall)
             self.average_precision_per_class[class_index] = average_precision
             logging.info('average_precision: %f', average_precision)
 
@@ -707,7 +708,8 @@ class ObjectDetectionEvaluation(object):
             num_gt_instances = np.sum(self.num_gt_instances_per_class)
             precision, recall = metrics.compute_precision_recall(
                 all_scores, all_tp_fp_labels, num_gt_instances)
-            mean_ap = metrics.compute_average_precision(precision, recall)
+            # mean_ap = metrics.compute_average_precision(precision, recall)
+            mean_ap = metrics.compute_voc_07_metrics(precision, recall)
         else:
             mean_ap = np.nanmean(self.average_precision_per_class)
         mean_corloc = np.nanmean(self.corloc_per_class)

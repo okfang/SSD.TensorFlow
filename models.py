@@ -5,7 +5,8 @@ import tensorflow as tf
 import eval_util
 import inputs
 from net import ssd_net
-from utils import anchor_manipulator, visualization_utils
+# from train_ssd import FLAGS
+from utils import anchor_manipulator, visualization_utils, scaffolds
 from utils.postprocessing import per_image_post_process
 from utils.shape_util import pad_or_clip_nd, unpad_tensor
 
@@ -34,6 +35,12 @@ VOC_LABELS = {
     'tvmonitor': (20, 'Indoor'),
 }
 
+def get_init_fn(model_dir,checkpoint_path,model_scope,checkpoint_model_scope,checkpoint_exclude_scopes,ignore_missing_vars):
+    return scaffolds.get_init_fn_for_scaffold(model_dir, checkpoint_path,
+                                              model_scope, checkpoint_model_scope,
+                                              checkpoint_exclude_scopes, ignore_missing_vars,
+                                              name_remap={'/kernel': '/weights', '/bias': '/biases'})
+
 def modified_smooth_l1(bbox_pred, bbox_targets, bbox_inside_weights=1., bbox_outside_weights=1., sigma=1.):
     """
         ResultLoss = outside_weights * SmoothL1(inside_weights * (bbox_pred - bbox_targets))
@@ -59,15 +66,16 @@ def modified_smooth_l1(bbox_pred, bbox_targets, bbox_inside_weights=1., bbox_out
 def predict(features,mode,params,all_num_anchors_depth):
     with tf.variable_scope(params["model_scope"], default_name=None, values=[features], reuse=tf.AUTO_REUSE):
         # get vgg16 net
-        backbone = ssd_net.VGG16Backbone(params['data_format'])
+        backbone = ssd_net.VGG16Backbone(params['data_format'],using_batch_normal=params["using_batch_normal"])
         # return feature layers
         # feature_layers -> ['conv4','fc7','conv8','conv9','conv10','conv11']
         feature_layers = backbone.forward(features, training=(mode == tf.estimator.ModeKeys.TRAIN))
 
         # location_pred -> [[batch_size, num_anchor_per_position*4, feature_map_size, feature_map_size,],[],[],[],[],[]]
         # cls_pred -> [[batch_size, num_anchor_per_position*21,   , feature_map_size,],[],[],[],[],[]]
-        location_pred, cls_pred = ssd_net.multibox_head(feature_layers, params['num_classes'], all_num_anchors_depth,
-                                                        data_format=params['data_format'])
+        location_pred, cls_pred = backbone.multibox_head(feature_layers, params['num_classes'], all_num_anchors_depth,
+                                                        data_format=params['data_format'],bn_detection_head=params['bn_detection_head'],
+                                                         training=(mode == tf.estimator.ModeKeys.TRAIN))
 
         # whether using "channels_first", can accelerate calculation
         if params['data_format'] == 'channels_first':
@@ -163,11 +171,12 @@ def build_losses(cls_targets=None,cls_pred=None, loc_targets=None,loc_pred=None,
 
 def build_distillation_loss(features,cls_pred,location_pred,mode,all_num_anchors_depth,params):
     with tf.variable_scope('distillation', values=[features]):
-        dist_backbone = ssd_net.VGG16Backbone(params['data_format'])
+        dist_backbone = ssd_net.VGG16Backbone(params['data_format'],using_batch_normal=True)
         dist_feature_layers = dist_backbone.forward(features, training=(mode == tf.estimator.ModeKeys.TRAIN))
-        dist_location_pred, dist_cls_pred = ssd_net.multibox_head(dist_feature_layers, params['num_classes'],
+        dist_location_pred, dist_cls_pred = dist_backbone.multibox_head(dist_feature_layers, params['num_classes'],
                                                                   all_num_anchors_depth,
-                                                                  data_format=params['data_format'])
+                                                                  data_format=params['data_format'],
+                                                                bn_detection_head=True)
         if params['data_format'] == 'channels_first':
             dist_cls_pred = [tf.transpose(pred, [0, 2, 3, 1]) for pred in dist_cls_pred]
             dist_location_pred = [tf.transpose(pred, [0, 2, 3, 1]) for pred in dist_location_pred]
@@ -378,6 +387,7 @@ def ssd_model_fn(features, labels, mode, params):
         learning_rate = tf.train.piecewise_constant(tf.cast(global_step, tf.int32),
                                                     [int(_) for _ in params['decay_boundaries']],
                                                     lr_values)
+        # learning_rate = tf.constant(params['learning_rate'])
         # execute truncated_learning_rate
         truncated_learning_rate = tf.maximum(learning_rate,
                                              tf.constant(params['end_learning_rate'], dtype=learning_rate.dtype),
@@ -394,12 +404,14 @@ def ssd_model_fn(features, labels, mode, params):
             train_op = optimizer.minimize(total_loss, global_step)
     else:
         train_op = None
-
+    #
+    # init_op = tf.train.init_from_checkpoint(ckpt_dir_or_file=params['checkpoint_path'])
     return tf.estimator.EstimatorSpec(
         mode=mode,
         predictions=None,
         loss=total_loss,
         train_op=train_op,
         eval_metric_ops=metrics,
-        scaffold=tf.train.Scaffold(init_fn=None)
+        # scaffold=tf.train.Scaffold(init_fn=get_init_fn(params['model_dir'],params['checkpoint_path'],params['model_scope'],params['checkpoint_model_scope'],params['checkpoint_exclude_scopes'],params['ignore_missing_vars'])),
+        # scaffold=tf.train.Scaffold(init_op=init_op)
     )

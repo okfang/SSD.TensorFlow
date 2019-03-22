@@ -76,7 +76,8 @@ def write_metrics(metrics, global_step, summary_dir):
 def get_evaluators(categories, eval_metric_fn_key="coco_detection_metrics"):
     if eval_metric_fn_key== "coco_detection_metrics":
         kwargs_dict = {
-              'include_metrics_per_category': (False)
+            'include_metrics_per_category' : True,
+            'all_metrics_per_category' : True
           }
     else:
         kwargs_dict = {}

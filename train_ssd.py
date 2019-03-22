@@ -46,14 +46,23 @@ tf.app.flags.DEFINE_string(
     'The directory where the dataset input data is stored.')
 tf.app.flags.DEFINE_integer(
     'num_classes', 21, 'Number of classes to use in the dataset.')
+
+# '2019-03-12-16-08-41'
+# '2019-03-15-12-53-26'
+# '2019-03-15-16-39-59_bn'
+# '2019-03-18-10-16-20_bn_wo_l2_loss'
+# '2019-03-19-18-42-51_bn_wo_l2_loss'
+# '2019-03-21-13-32-46_w_pretrained_wo_bn'
+save_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
+model_dir_string = os.path.join('./logs','2019-03-19-18-42-51_bn_wo_l2_loss')
 tf.app.flags.DEFINE_string(
-    'model_dir', './logs',
+    'model_dir', model_dir_string,
     'The directory where the model will be stored.')
 tf.app.flags.DEFINE_integer(
-    'log_every_n_steps',10,
+    'log_every_n_steps',50,
     'The frequency with which logs are printed.')
 tf.app.flags.DEFINE_integer(
-    'save_summary_steps', 20,
+    'save_summary_steps', 100,
     'The frequency with which summaries are saved, in seconds.')
 tf.app.flags.DEFINE_integer(
     'save_checkpoints_secs', None,
@@ -66,7 +75,7 @@ tf.app.flags.DEFINE_integer(
     'train_epochs', None,
     'The number of epochs to use for training.')
 tf.app.flags.DEFINE_integer(
-    'max_number_of_steps', 120000,
+    'max_number_of_steps', 200000,
     'The max number of steps to use for training.')
 tf.app.flags.DEFINE_integer(
     'batch_size',16,
@@ -104,7 +113,7 @@ tf.app.flags.DEFINE_string(
     'The values of learning_rate decay factor for each segment between boundaries (comma-separated list).')
 # checkpoint related configuration
 tf.app.flags.DEFINE_string(
-    'checkpoint_path', './model',
+    'checkpoint_path', './logs/pretrained_ssd',
     'The path to a checkpoint from which to fine-tune.')
 tf.app.flags.DEFINE_string(
     'checkpoint_model_scope', 'vgg_16',
@@ -136,9 +145,9 @@ tf.app.flags.DEFINE_integer(
 
 # visualization realted configuration
 tf.app.flags.DEFINE_integer(
-    'max_examples_to_draw', 10, 'Number of image to draw while eval.')
+    'max_examples_to_draw', 30, 'Number of image to draw while eval.')
 tf.app.flags.DEFINE_integer(
-    'max_boxes_to_draw',5, 'Number of bbox to draw per image while eval.')
+    'max_boxes_to_draw',20, 'Number of bbox to draw per image while eval.')
 tf.app.flags.DEFINE_float(
     'min_score_thresh',0.2, 'min score of bbox to draw')
 
@@ -152,15 +161,9 @@ tf.app.flags.DEFINE_integer(
 
 FLAGS = tf.app.flags.FLAGS
 
+
 def parse_comma_list(args):
     return [float(s.strip()) for s in args.split(',')]
-
-def get_init_fn():
-    return scaffolds.get_init_fn_for_scaffold(FLAGS.model_dir, FLAGS.checkpoint_path,
-                                              FLAGS.model_scope, FLAGS.checkpoint_model_scope,
-                                              FLAGS.checkpoint_exclude_scopes, FLAGS.ignore_missing_vars,
-                                              name_remap={'/kernel': '/weights', '/bias': '/biases'})
-
 
 def main(_):
     # Using the Winograd non-fused algorithms provides a small performance boost.
@@ -173,19 +176,20 @@ def main(_):
     # Set up a RunConfig to only save checkpoints once per training cycle.
     run_config = tf.estimator.RunConfig().replace(
         save_checkpoints_secs=FLAGS.save_checkpoints_secs).replace(
-        save_checkpoints_steps=500).replace(
+        save_checkpoints_steps=2000).replace(
         save_summary_steps=FLAGS.save_summary_steps).replace(
         keep_checkpoint_max=5).replace(
         tf_random_seed=FLAGS.tf_random_seed).replace(
         log_step_count_steps=FLAGS.log_every_n_steps)\
-        .replace(
-        train_distribute=distribute_strategy
-    )
+    #     .replace(
+    #     train_distribute=distribute_strategy
+    # )
 
     # replicate_ssd_model_fn =
-    save_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
+    # ws = tf.estimator.WarmStartSettings(ckpt_to_initialize_from=FLAGS.checkpoint_path,
+    #                                     vars_to_warm_start=[""])
     ssd_detector = tf.estimator.Estimator(
-        model_fn=ssd_model_fn, model_dir=os.path.join(FLAGS.model_dir,'2019-03-12-16-08-41'), config=run_config,
+        model_fn=ssd_model_fn, model_dir=FLAGS.model_dir, config=run_config,
         params={
             # training
             'num_gpus': 2,
@@ -202,13 +206,22 @@ def main(_):
             'end_learning_rate': FLAGS.end_learning_rate,
             'decay_boundaries': parse_comma_list(FLAGS.decay_boundaries),
             'lr_decay_factors': parse_comma_list(FLAGS.lr_decay_factors),
+            'using_batch_normal':True,
+            'bn_detection_head':True,
+            # init_fn
+            'model_dir': FLAGS.model_dir,
+            'checkpoint_path': FLAGS.checkpoint_path,
+            'checkpoint_model_scope': FLAGS.checkpoint_model_scope,
+            'checkpoint_exclude_scopes':FLAGS.checkpoint_exclude_scopes,
+            'ignore_missing_vars':FLAGS.ignore_missing_vars,
             # evaluation
             'select_threshold': FLAGS.select_threshold,
             'min_size': FLAGS.min_size,
             'nms_threshold': FLAGS.nms_threshold,
             'nms_topk': FLAGS.nms_topk,
             'keep_topk': FLAGS.keep_topk,
-            'eval_metric_fn_key': "coco_detection_metrics",
+            # 'eval_metric_fn_key': "coco_detection_metrics",
+            'eval_metric_fn_key': "pascal_voc_detection_metrics",
             'pad_nms_detections': 100,
             # visualize
             'max_examples_to_draw': FLAGS.max_examples_to_draw,
@@ -245,28 +258,37 @@ def main(_):
                                                    formatter=lambda dicts: (', '.join(['%s=%.6f' % (k, v) for k, v in dicts.items()])))
 
     train_input_pattern = '/home/dxfang/dataset/tfrecords/pascal_voc/train-000*'
-    eval_input_pattern = '/home/dxfang/dataset/tfrecords/pascal_voc/eval-000*'
+    eval_input_pattern ='/home/dxfang/dataset/tfrecords/pascal_voc/val-000*'
 
     print('Starting a training cycle.')
+    taskA_class_list =  list(range(1,11))
+    taskB_class_list =  list(range(11,21))
     train_spec = tf.estimator.TrainSpec(
-        input_fn=input_pipeline(file_pattern=train_input_pattern, is_training=True, batch_size=FLAGS.batch_size),
+        input_fn=input_pipeline(class_list=None,file_pattern=train_input_pattern, is_training=True, batch_size=FLAGS.batch_size),
         max_steps=FLAGS.max_number_of_steps,
-        hooks= [train_logging_hook]
+        hooks= [train_logging_hook],
     )
     eval_spec = tf.estimator.EvalSpec(
-        input_fn=input_pipeline(file_pattern=eval_input_pattern, is_training=False, batch_size=FLAGS.batch_size,num_readers=1),
+        input_fn=input_pipeline(class_list=None,file_pattern=eval_input_pattern, is_training=False, batch_size=FLAGS.batch_size,num_readers=1),
         hooks=[eval_logging_hook],
-        steps=10,
+        steps=100,
     )
+    # ssd_detector.train(
+    #     input_fn=input_pipeline(class_list=None, file_pattern=train_input_pattern, is_training=True,
+    #                             batch_size=FLAGS.batch_size),
+    #     steps=10,
+    #     hooks=[train_logging_hook]
+    # )
 
-    tf.estimator.train_and_evaluate(ssd_detector,train_spec,eval_spec)
+    # tf.estimator.train_and_evaluate(ssd_detector,train_spec,eval_spec)
 
-    # ssd_detector.evaluate(input_fn=input_pipeline(file_pattern=eval_input_pattern,
-    #                                               is_training=False,
-    #                                               batch_size=FLAGS.batch_size,
-    #                                               num_readers=1),
-    #                       hooks=[eval_logging_hook],
-    #                       steps=18)
+    ssd_detector.evaluate(input_fn=input_pipeline(file_pattern=eval_input_pattern,
+                                                  is_training=False,
+                                                  batch_size=FLAGS.batch_size,
+                                                  num_readers=1),
+                          hooks=[eval_logging_hook],
+                          steps=155
+                          )
 
     # distillation
     # class_for_use = range(1,FLAGS.step1_classes+1)
