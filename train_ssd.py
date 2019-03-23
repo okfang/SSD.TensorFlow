@@ -53,8 +53,9 @@ tf.app.flags.DEFINE_integer(
 # '2019-03-18-10-16-20_bn_wo_l2_loss'
 # '2019-03-19-18-42-51_bn_wo_l2_loss'
 # '2019-03-21-13-32-46_w_pretrained_wo_bn'
+# '2019-03-23-15-58-36_w_bn_w_pretrianed'
 save_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-model_dir_string = os.path.join('./logs','2019-03-19-18-42-51_bn_wo_l2_loss')
+model_dir_string = os.path.join('./logs','2019-03-23-15-58-36_w_pretrianed_wo_bn')
 tf.app.flags.DEFINE_string(
     'model_dir', model_dir_string,
     'The directory where the model will be stored.')
@@ -113,7 +114,7 @@ tf.app.flags.DEFINE_string(
     'The values of learning_rate decay factor for each segment between boundaries (comma-separated list).')
 # checkpoint related configuration
 tf.app.flags.DEFINE_string(
-    'checkpoint_path', './logs/pretrained_ssd',
+    'checkpoint_path', './pretrained_model',
     'The path to a checkpoint from which to fine-tune.')
 tf.app.flags.DEFINE_string(
     'checkpoint_model_scope', 'vgg_16',
@@ -181,9 +182,9 @@ def main(_):
         keep_checkpoint_max=5).replace(
         tf_random_seed=FLAGS.tf_random_seed).replace(
         log_step_count_steps=FLAGS.log_every_n_steps)\
-    #     .replace(
-    #     train_distribute=distribute_strategy
-    # )
+        .replace(
+        train_distribute=distribute_strategy
+    )
 
     # replicate_ssd_model_fn =
     # ws = tf.estimator.WarmStartSettings(ckpt_to_initialize_from=FLAGS.checkpoint_path,
@@ -206,8 +207,9 @@ def main(_):
             'end_learning_rate': FLAGS.end_learning_rate,
             'decay_boundaries': parse_comma_list(FLAGS.decay_boundaries),
             'lr_decay_factors': parse_comma_list(FLAGS.lr_decay_factors),
-            'using_batch_normal':True,
-            'bn_detection_head':True,
+            'backbone_batch_normal': False,
+            'additional_batch_normal':False,
+            'bn_detection_head':False,
             # init_fn
             'model_dir': FLAGS.model_dir,
             'checkpoint_path': FLAGS.checkpoint_path,
@@ -220,8 +222,8 @@ def main(_):
             'nms_threshold': FLAGS.nms_threshold,
             'nms_topk': FLAGS.nms_topk,
             'keep_topk': FLAGS.keep_topk,
-            # 'eval_metric_fn_key': "coco_detection_metrics",
-            'eval_metric_fn_key': "pascal_voc_detection_metrics",
+            'eval_metric_fn_key': "coco_detection_metrics",
+            # 'eval_metric_fn_key': "pascal_voc_detection_metrics",
             'pad_nms_detections': 100,
             # visualize
             'max_examples_to_draw': FLAGS.max_examples_to_draw,
@@ -276,19 +278,19 @@ def main(_):
     # ssd_detector.train(
     #     input_fn=input_pipeline(class_list=None, file_pattern=train_input_pattern, is_training=True,
     #                             batch_size=FLAGS.batch_size),
-    #     steps=10,
+    #     steps=1000,
     #     hooks=[train_logging_hook]
     # )
 
-    # tf.estimator.train_and_evaluate(ssd_detector,train_spec,eval_spec)
+    tf.estimator.train_and_evaluate(ssd_detector,train_spec,eval_spec)
 
-    ssd_detector.evaluate(input_fn=input_pipeline(file_pattern=eval_input_pattern,
-                                                  is_training=False,
-                                                  batch_size=FLAGS.batch_size,
-                                                  num_readers=1),
-                          hooks=[eval_logging_hook],
-                          steps=155
-                          )
+    # ssd_detector.evaluate(input_fn=input_pipeline(file_pattern=eval_input_pattern,
+    #                                               is_training=False,
+    #                                               batch_size=FLAGS.batch_size,
+    #                                               num_readers=1),
+    #                       hooks=[eval_logging_hook],
+    #                       steps=155
+    #                       )
 
     # distillation
     # class_for_use = range(1,FLAGS.step1_classes+1)

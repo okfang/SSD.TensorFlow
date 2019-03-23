@@ -66,7 +66,7 @@ def modified_smooth_l1(bbox_pred, bbox_targets, bbox_inside_weights=1., bbox_out
 def predict(features,mode,params,all_num_anchors_depth):
     with tf.variable_scope(params["model_scope"], default_name=None, values=[features], reuse=tf.AUTO_REUSE):
         # get vgg16 net
-        backbone = ssd_net.VGG16Backbone(params['data_format'],using_batch_normal=params["using_batch_normal"])
+        backbone = ssd_net.VGG16Backbone(params['data_format'],backbone_batch_normal=params["backbone_batch_normal"],additional_batch_normal=params['additional_batch_normal'])
         # return feature layers
         # feature_layers -> ['conv4','fc7','conv8','conv9','conv10','conv11']
         feature_layers = backbone.forward(features, training=(mode == tf.estimator.ModeKeys.TRAIN))
@@ -387,7 +387,7 @@ def ssd_model_fn(features, labels, mode, params):
         learning_rate = tf.train.piecewise_constant(tf.cast(global_step, tf.int32),
                                                     [int(_) for _ in params['decay_boundaries']],
                                                     lr_values)
-        # learning_rate = tf.constant(params['learning_rate'])
+        # learning_rate = tf.constant(1e-2)
         # execute truncated_learning_rate
         truncated_learning_rate = tf.maximum(learning_rate,
                                              tf.constant(params['end_learning_rate'], dtype=learning_rate.dtype),
@@ -412,6 +412,6 @@ def ssd_model_fn(features, labels, mode, params):
         loss=total_loss,
         train_op=train_op,
         eval_metric_ops=metrics,
-        # scaffold=tf.train.Scaffold(init_fn=get_init_fn(params['model_dir'],params['checkpoint_path'],params['model_scope'],params['checkpoint_model_scope'],params['checkpoint_exclude_scopes'],params['ignore_missing_vars'])),
+        scaffold=tf.train.Scaffold(init_fn=get_init_fn(params['model_dir'],params['checkpoint_path'],params['model_scope'],params['checkpoint_model_scope'],params['checkpoint_exclude_scopes'],params['ignore_missing_vars'])),
         # scaffold=tf.train.Scaffold(init_op=init_op)
     )

@@ -73,41 +73,40 @@ def forward_module(m, inputs, training=False):
     return m.apply(inputs)
 
 class VGG16Backbone(object):
-    def __init__(self, data_format='channels_first',using_batch_normal = False):
+    def __init__(self, data_format='channels_first',backbone_batch_normal=False,additional_batch_normal=False):
         super(VGG16Backbone, self).__init__()
-        self._using_batch_normal = using_batch_normal
         self._data_format = data_format
         self._bn_axis = -1 if data_format == 'channels_last' else 1
         #initializer = tf.glorot_uniform_initializer  glorot_normal_initializer
         self._conv_initializer = tf.glorot_uniform_initializer
         self._conv_bn_initializer = tf.glorot_uniform_initializer#lambda : tf.truncated_normal_initializer(mean=0.0, stddev=0.005)
         # VGG layers
-        self._conv1_block = self.conv_block(2, 64, 3, (1, 1), 'conv1') if not using_batch_normal else self.conv_bn_block(2, 64, 3, (1, 1), 'conv1_bn')
+        self._conv1_block = self.conv_block(2, 64, 3, (1, 1), 'conv1') if not backbone_batch_normal else self.conv_bn_block(2, 64, 3, (1, 1), 'conv1_bn')
         self._pool1 = tf.layers.MaxPooling2D(2, 2, padding='same', data_format=self._data_format, name='pool1')
-        self._conv2_block = self.conv_block(2, 128, 3, (1, 1), 'conv2') if not using_batch_normal else self.conv_bn_block(2, 128, 3, (1, 1), 'conv2_bn')
+        self._conv2_block = self.conv_block(2, 128, 3, (1, 1), 'conv2') if not backbone_batch_normal else self.conv_bn_block(2, 128, 3, (1, 1), 'conv2_bn')
         self._pool2 = tf.layers.MaxPooling2D(2, 2, padding='same', data_format=self._data_format, name='pool2')
-        self._conv3_block = self.conv_block(3, 256, 3, (1, 1), 'conv3') if not using_batch_normal else self.conv_bn_block(3, 256, 3, (1, 1), 'conv3_bn')
+        self._conv3_block = self.conv_block(3, 256, 3, (1, 1), 'conv3') if not backbone_batch_normal else self.conv_bn_block(3, 256, 3, (1, 1), 'conv3_bn')
         self._pool3 = tf.layers.MaxPooling2D(2, 2, padding='same', data_format=self._data_format, name='pool3')
-        self._conv4_block = self.conv_block(3, 512, 3, (1, 1), 'conv4') if not using_batch_normal else self.conv_bn_block(3, 512, 3, (1, 1), 'conv4_bn')
+        self._conv4_block = self.conv_block(3, 512, 3, (1, 1), 'conv4') if not backbone_batch_normal else self.conv_bn_block(3, 512, 3, (1, 1), 'conv4_bn')
         self._pool4 = tf.layers.MaxPooling2D(2, 2, padding='same', data_format=self._data_format, name='pool4')
-        self._conv5_block = self.conv_block(3, 512, 3, (1, 1), 'conv5') if not using_batch_normal else self.conv_bn_block(3, 512, 3, (1, 1), 'conv5_bn')
+        self._conv5_block = self.conv_block(3, 512, 3, (1, 1), 'conv5') if not backbone_batch_normal else self.conv_bn_block(3, 512, 3, (1, 1), 'conv5_bn')
         self._pool5 = tf.layers.MaxPooling2D(3, 1, padding='same', data_format=self._data_format, name='pool5')
         self._conv6 = [tf.layers.Conv2D(filters=1024, kernel_size=3, strides=1, padding='same', dilation_rate=6,
                             data_format=self._data_format, activation=tf.nn.relu, use_bias=True,
                             kernel_initializer=self._conv_initializer(),
                             bias_initializer=tf.zeros_initializer(),
-                            name='fc6', _scope='fc6', _reuse=None)] if not using_batch_normal else self.conv_bn_block(1, 1024, 3, (1, 1), 'fc6_bn')
+                            name='fc6', _scope='fc6', _reuse=None)] if not additional_batch_normal else self.conv_bn_block(1, 1024, 3, (1, 1), 'fc6_bn')
         self._conv7 = [tf.layers.Conv2D(filters=1024, kernel_size=1, strides=1, padding='same',
                             data_format=self._data_format, activation=tf.nn.relu, use_bias=True,
                             kernel_initializer=self._conv_initializer(),
                             bias_initializer=tf.zeros_initializer(),
-                            name='fc7', _scope='fc7', _reuse=None)] if not using_batch_normal else self.conv_bn_block(1, 1024, 1, (1, 1), 'fc7_bn')
+                            name='fc7', _scope='fc7', _reuse=None)] if not additional_batch_normal else self.conv_bn_block(1, 1024, 1, (1, 1), 'fc7_bn')
         # SSD layers
         with tf.variable_scope('additional_layers') as scope:
-            self._conv8_block = self.ssd_conv_block(256, 2, 'conv8') if not using_batch_normal else self.ssd_conv_bn_block(256, 2, 'conv8_bn')
-            self._conv9_block = self.ssd_conv_block(128, 2, 'conv9') if not using_batch_normal else self.ssd_conv_bn_block(128, 2, 'conv9_bn')
-            self._conv10_block = self.ssd_conv_block(128, 1, 'conv10', padding='valid') if not using_batch_normal else self.ssd_conv_bn_block(128, 1, 'conv10_bn',padding='valid')
-            self._conv11_block = self.ssd_conv_block(128, 1, 'conv11', padding='valid') if not using_batch_normal else self.ssd_conv_bn_block(128, 1, 'conv11_bn',padding='valid')
+            self._conv8_block = self.ssd_conv_block(256, 2, 'conv8') if not additional_batch_normal else self.ssd_conv_bn_block(256, 2, 'conv8_bn')
+            self._conv9_block = self.ssd_conv_block(128, 2, 'conv9') if not additional_batch_normal else self.ssd_conv_bn_block(128, 2, 'conv9_bn')
+            self._conv10_block = self.ssd_conv_block(128, 1, 'conv10', padding='valid') if not additional_batch_normal else self.ssd_conv_bn_block(128, 1, 'conv10_bn',padding='valid')
+            self._conv11_block = self.ssd_conv_block(128, 1, 'conv11', padding='valid') if not additional_batch_normal else self.ssd_conv_bn_block(128, 1, 'conv11_bn',padding='valid')
 
     def l2_normalize(self, x, name):
         with tf.name_scope(name, "l2_normalize", [x]) as name:
