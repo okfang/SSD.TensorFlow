@@ -9,6 +9,13 @@
           </mappings>
         </serverdata>
       </paths>
+      <paths name="Copy of project-level server 'gpuserver'">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/tmp/pycharm_project_253" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="Copy of project-level server 'kingdom'">
         <serverdata>
           <mappings>
