@@ -90,7 +90,6 @@ def predict(features,mode,params,all_num_anchors_depth):
         location_pred = tf.concat(location_pred, axis=1)
         return cls_pred, location_pred
 
-
 def hard_example_mining(cls_targets, cls_pred, params):
     """ 
     :param cls_targets  [batch_size,num_all_anchors]
@@ -168,15 +167,45 @@ def build_losses(cls_targets=None,cls_pred=None, loc_targets=None,loc_pred=None,
 
     return cross_entropy, loc_loss, l2_loss
 
+def dist_build_losses(cls_targets=None,cls_pred=None, loc_targets=None,loc_pred=None, params=None):
+    cls_targets = cls_targets[:]
+    cls_pred = cls_pred[:,:11]
+    # loc_targets = None
+    # loc_pred = None
+
+    cross_entropy = tf.losses.sparse_softmax_cross_entropy(labels=cls_targets, logits=cls_pred) * (
+                params['negative_ratio'] + 1.)
+    tf.identity(cross_entropy, name='cross_entropy_loss')
+    tf.summary.scalar('cross_entropy_loss', cross_entropy)
+
+    # loc_loss = tf.cond(n_positives > 0, lambda: modified_smooth_l1(location_pred, tf.stop_gradient(flatten_loc_targets), sigma=1.), lambda: tf.zeros_like(location_pred))
+    loc_loss = modified_smooth_l1(loc_pred, loc_targets, sigma=1.)
+    loc_loss = tf.reduce_mean(tf.reduce_sum(loc_loss, axis=-1), name='location_loss')
+    tf.summary.scalar('location_loss', loc_loss)
+    tf.losses.add_loss(loc_loss)
+
+    # loss for regularization
+    l2_loss_vars = []
+    for trainable_var in tf.trainable_variables():
+        if '_bn' not in trainable_var.name:
+            if 'conv4_3_scale' not in trainable_var.name:
+                l2_loss_vars.append(tf.nn.l2_loss(trainable_var))
+            else:
+                l2_loss_vars.append(tf.nn.l2_loss(trainable_var) * 0.1)
+    # Add weight decay to the loss. We exclude the batch norm variables because
+    # doing so leads to a small improvement in accuracy.
+    l2_loss = tf.multiply(params['weight_decay'], tf.add_n(l2_loss_vars), name='l2_loss')
+
+    return cross_entropy, loc_loss, l2_loss
+
 
 def build_distillation_loss(features,cls_pred,location_pred,mode,all_num_anchors_depth,params):
     with tf.variable_scope('distillation', values=[features]):
-        dist_backbone = ssd_net.VGG16Backbone(params['data_format'],using_batch_normal=True)
+        dist_backbone = ssd_net.VGG16Backbone(params['data_format'])
         dist_feature_layers = dist_backbone.forward(features, training=(mode == tf.estimator.ModeKeys.TRAIN))
         dist_location_pred, dist_cls_pred = dist_backbone.multibox_head(dist_feature_layers, params['num_classes'],
                                                                   all_num_anchors_depth,
-                                                                  data_format=params['data_format'],
-                                                                bn_detection_head=True)
+                                                                  data_format=params['data_format'])
         if params['data_format'] == 'channels_first':
             dist_cls_pred = [tf.transpose(pred, [0, 2, 3, 1]) for pred in dist_cls_pred]
             dist_location_pred = [tf.transpose(pred, [0, 2, 3, 1]) for pred in dist_location_pred]
@@ -290,7 +319,9 @@ def ssd_model_fn(features, labels, mode, params):
             tf.summary.scalar('cls_accuracy', cls_accuracy[1])
 
             metrics = {'cls_accuracy': cls_accuracy}
+
     # losses
+
     cross_entropy, loc_loss, l2_loss = build_losses(cls_targets=flatten_cls_targets_hard_exam_mining,
                                                     cls_pred=flatten_cls_pred_hard_exam_mining,
                                                     loc_targets=flatten_loc_targets_hard_exam_mining,
@@ -330,7 +361,7 @@ def ssd_model_fn(features, labels, mode, params):
             # batched detections
             # detection_boxes -> shape: [batch_size,max_nms_detections，4]
             # detection_scores -> shape: [batch_size,max_nms_detections，]
-            # detection_classes -> shape: [batch_size,max_nms_detections，]   labels: 1,2,...21
+            # detection_classes -> shape: [batch_size,max_nms_detections，]   labels: 1,2,...20
             detection_boxes = tf.stack(detection_boxes_list,axis=0)
             detection_scores = tf.stack(detection_scores_list,axis=0)
             detection_classes = tf.cast(tf.stack(detection_classes_list,axis=0),tf.int32)
