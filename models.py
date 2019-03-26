@@ -142,7 +142,13 @@ def hard_example_mining(cls_targets, cls_pred, params):
         return final_mask, positive_mask
 
 
-def build_losses(cls_targets=None,cls_pred=None, loc_targets=None,loc_pred=None, params=None):
+def build_losses(cls_targets=None,cls_pred=None, loc_targets=None,loc_pred=None, params=None,is_task_A=False,is_task_B=False):
+
+    if is_task_A:
+        cls_pred = cls_pred[:, :11]
+    if is_task_B:
+        cls_pred = tf.gather(cls_pred, [0]+list(range(11, 21)), axis=1)
+
     cross_entropy = tf.losses.sparse_softmax_cross_entropy(labels=cls_targets,logits=cls_pred) * (params['negative_ratio'] + 1.)
     tf.identity(cross_entropy, name='cross_entropy_loss')
     tf.summary.scalar('cross_entropy_loss', cross_entropy)
@@ -245,19 +251,13 @@ def ssd_model_fn(features, labels, mode, params):
     # calculate the number of anchors of each feature layer.
     num_anchors_per_layer = [depth * spatial for depth, spatial in zip(all_num_anchors_depth, all_num_anchors_spatial)]
 
-    # for prediction
-    filename = labels['filename']
-    shape = labels['true_image_shape']
+    processed_image = features['preprocessed_image']
 
-    # get and process input
-    num_groundtruth_boxes = labels['num_groundtruth_boxes']
-    groundtruth_classes = labels['groundtruth_classes']
-    groundtruth_boxes = labels['groundtruth_boxes']
-    original_image_spatial_shape = labels['original_image_spatial_shape']
-    true_image_shape = labels['true_image_shape']
-    # unpadding  num_boxes dimension for real num_groundtruth_boxes
-    unpaded_groundtruth_classes = unpad_tensor(groundtruth_classes,num_groundtruth_boxes)
-    unpaded_groundtruth_boxes = unpad_tensor(groundtruth_boxes,num_groundtruth_boxes)
+    # for prediction
+    shape = features['original_shape']
+    filename = features['filename']
+
+
 
     anchor_encoder_decoder = anchor_manipulator.AnchorEncoder(positive_threshold=params['positive_threshold'],
                                                               neg_threshold=params['neg_threshold'],
@@ -273,6 +273,18 @@ def ssd_model_fn(features, labels, mode, params):
     decode_fn = functools.partial(anchor_encoder_decoder.decode_all_anchors,
                                   all_anchors=all_anchors,
                                   num_anchors_per_layer=num_anchors_per_layer)
+
+    # get and process input
+    num_groundtruth_boxes = labels['num_groundtruth_boxes']
+    groundtruth_classes = labels['groundtruth_classes']
+    groundtruth_boxes = labels['groundtruth_boxes']
+    original_image_spatial_shape = labels['original_image_spatial_shape']
+    true_image_shape = labels['true_image_shape']
+
+    # unpadding  num_boxes dimension for real num_groundtruth_boxes
+    unpaded_groundtruth_classes = unpad_tensor(groundtruth_classes, num_groundtruth_boxes)
+    unpaded_groundtruth_boxes = unpad_tensor(groundtruth_boxes, num_groundtruth_boxes)
+
     # construct train example
     loc_targets_list, cls_targets_list, matched_iou_scores_list = [], [], []
     for _groundtruth_classes, _groundtruth_boxes in zip(unpaded_groundtruth_classes,unpaded_groundtruth_boxes):
@@ -289,8 +301,7 @@ def ssd_model_fn(features, labels, mode, params):
 
     # cls_pred -> shape: [batch_size,num_all_anchors,21]
     # location_pred -> shape: [batch_size,num_all_anchors,4]
-    cls_pred, location_pred = predict(features,mode,params,all_num_anchors_depth)
-
+    cls_pred, location_pred = predict(processed_image,mode,params,all_num_anchors_depth)
 
     # decode boxes  这里可能有问题？ bboxes_pred 的所有anchors 是按照feature layer的顺序排列的
 
@@ -324,6 +335,7 @@ def ssd_model_fn(features, labels, mode, params):
             tf.summary.scalar('cls_accuracy', cls_accuracy[1])
 
     # losses
+
     cross_entropy, loc_loss, l2_loss = build_losses(cls_targets=flatten_cls_targets_hard_exam_mining,
                                                     cls_pred=flatten_cls_pred_hard_exam_mining,
                                                     loc_targets=flatten_loc_targets_hard_exam_mining,
@@ -331,19 +343,21 @@ def ssd_model_fn(features, labels, mode, params):
                                                     params=params)
     total_loss = tf.add_n([cross_entropy, loc_loss, l2_loss], name='total_loss')
 
-
-
-
     with tf.name_scope("post_processing"):
-        post_process_for_single_example = functools.partial(per_image_post_process,num_classes=params['num_classes'],
-                                                                                   select_threshold=params['select_threshold'],
-                                                                                   min_size=params['min_size'],
-                                                                                   keep_topk=params['keep_topk'],
-                                                                                   nms_topk=params['nms_topk'],
-                                                                                   nms_threshold=params['nms_threshold'])
+        post_process_for_single_example = functools.partial(per_image_post_process,
+                                                           select_threshold=params['select_threshold'],
+                                                           min_size=params['min_size'],
+                                                           keep_topk=params['keep_topk'],
+                                                           nms_topk=params['nms_topk'],
+                                                           nms_threshold=params['nms_threshold'],
+                                                            is_tack_A=params['is_tack_A'],
+                                                            is_task_B=params['is_tack_B']
+                                                            )
 
         if mode == tf.estimator.ModeKeys.PREDICT:
-            selected_scores,selected_bboxes = post_process_for_single_example(cls_pred, bboxes_pred)
+            cls_pred = tf.squeeze(cls_pred,axis=0)
+            bboxes_pred = tf.squeeze(bboxes_pred,axis=0)
+            selected_scores,selected_bboxes = post_process_for_single_example(cls_pred, bboxes_pred,mode)
             predictions = {'filename': filename, 'shape': shape}
             for class_ind in range(1, params['num_classes']):
                 predictions['scores_{}'.format(class_ind)] = tf.expand_dims(selected_scores[class_ind], axis=0)
@@ -363,7 +377,7 @@ def ssd_model_fn(features, labels, mode, params):
             num_detections_list= []
             for cls_pred_, bboxes_pred_ in zip(cls_pred_list,bboxes_pred_list):
                 detection_boxes, detection_scores,detection_classes,\
-                             num_detections = post_process_for_single_example(cls_pred_, bboxes_pred_)
+                             num_detections = post_process_for_single_example(cls_pred_, bboxes_pred_,mode)
 
                 # padding along num_detections dimension
                 detection_boxes = pad_or_clip_nd(detection_boxes, [params['pad_nms_detections'],4])
@@ -422,11 +436,10 @@ def ssd_model_fn(features, labels, mode, params):
             eval_metric_ops = evaluator.get_estimator_eval_metric_ops(eval_input_dict)
             metrics.update(eval_metric_ops)
 
-
     if mode == tf.estimator.ModeKeys.TRAIN:
         # distillate knowledge
         if params["distillation"] == True:
-            class_distillation_loss, bboxes_distillation_loss = build_distillation_loss(features,cls_pred,location_pred,mode,all_num_anchors_depth,params)
+            class_distillation_loss, bboxes_distillation_loss = build_distillation_loss(processed_image,cls_pred,location_pred,mode,all_num_anchors_depth,params)
             total_loss = tf.add_n(total_loss,class_distillation_loss,bboxes_distillation_loss,name="total_loss_with_distillation")
             tf.summary.scalar('total_loss_with_distillation', total_loss)
 

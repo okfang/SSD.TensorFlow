@@ -350,26 +350,26 @@ class CocoDetectionEvaluator(object_detection_evaluation.DetectionEvaluator):
                     category))
                 metric_names.append('DetectionBoxes_Precision mAP@.50IOU ByCategory/{}'.format(
                     category))
-                metric_names.append('DetectionBoxes_Precision mAP@.75IOU ByCategory/{}'.format(
-                    category))
-                metric_names.append('DetectionBoxes_Precision mAP (small) ByCategory/{}'.format(
-                    category))
-                metric_names.append('DetectionBoxes_Precision mAP (medium) ByCategory/{}'.format(
-                    category))
-                metric_names.append('DetectionBoxes_Precision mAP (large) ByCategory/{}'.format(
-                    category))
-                metric_names.append('DetectionBoxes_Recall AR@1 ByCategory/{}'.format(
-                    category))
-                metric_names.append('DetectionBoxes_Recall AR@10 ByCategory/{}'.format(
-                    category))
-                metric_names.append('DetectionBoxes_Recall AR@100 ByCategory/{}'.format(
-                    category))
-                metric_names.append('DetectionBoxes_Recall AR@100 (small) ByCategory/{}'.format(
-                    category))
-                metric_names.append('DetectionBoxes_Recall AR@100 (medium) ByCategory/{}'.format(
-                    category))
-                metric_names.append('DetectionBoxes_Recall AR@100 (large) ByCategory/{}'.format(
-                    category))
+                # metric_names.append('DetectionBoxes_Precision mAP@.75IOU ByCategory/{}'.format(
+                #     category))
+                # metric_names.append('DetectionBoxes_Precision mAP (small) ByCategory/{}'.format(
+                #     category))
+                # metric_names.append('DetectionBoxes_Precision mAP (medium) ByCategory/{}'.format(
+                #     category))
+                # metric_names.append('DetectionBoxes_Precision mAP (large) ByCategory/{}'.format(
+                #     category))
+                # metric_names.append('DetectionBoxes_Recall AR@1 ByCategory/{}'.format(
+                #     category))
+                # metric_names.append('DetectionBoxes_Recall AR@10 ByCategory/{}'.format(
+                #     category))
+                # metric_names.append('DetectionBoxes_Recall AR@100 ByCategory/{}'.format(
+                #     category))
+                # metric_names.append('DetectionBoxes_Recall AR@100 (small) ByCategory/{}'.format(
+                #     category))
+                # metric_names.append('DetectionBoxes_Recall AR@100 (medium) ByCategory/{}'.format(
+                #     category))
+                # metric_names.append('DetectionBoxes_Recall AR@100 (large) ByCategory/{}'.format(
+                #     category))
 
         def first_value_func():
             self._metrics = self.evaluate()

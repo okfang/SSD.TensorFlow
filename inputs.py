@@ -126,16 +126,19 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
             preprocessed_image = tf.transpose(preprocessed_image, perm=(2, 0, 1))
 
         # [300,300,]
-        features = preprocessed_image
-
+        features = {
+            'preprocessed_image':preprocessed_image,
+            'filename': filename,
+            'original_shape': original_shape
+        }
         labels = {'original_image_spatial_shape': original_image_spatial_shape,
                   'true_image_shape': true_image_shape,
-                  'original_shape':original_shape,
                   'num_groundtruth_boxes': num_groundtruth_boxes,
                   'groundtruth_boxes': groundtruth_boxes,
-                  'groundtruth_classes': groundtruth_classes,
                   'key': key,
-                  'filename':filename}
+                  'groundtruth_classes': groundtruth_classes,
+
+                  }
 
         if not is_training:
             labels['original_image'] = image_before_normalization
@@ -157,41 +160,7 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
     dataset = dataset.prefetch(buffer_size=None)
     return dataset
 
-def input_fn(class_list=None,file_pattern='train-*', is_training=True, batch_size=None,data_format='channels_first',num_readers=2,params=None):
-    out_shape = [train_image_size] * 2
-    anchor_creator = anchor_manipulator.AnchorCreator(out_shape,
-                                                      layers_shapes=[(38, 38), (19, 19), (10, 10), (5, 5),
-                                                                     (3, 3),
-                                                                     (1, 1)],
-                                                      anchor_scales=[(0.1,), (0.2,), (0.375,), (0.55,),
-                                                                     (0.725,),
-                                                                     (0.9,)],
-                                                      extra_anchor_scales=[(0.1414,), (0.2739,), (0.4541,),
-                                                                           (0.6315,), (0.8078,), (0.9836,)],
-                                                      anchor_ratios=[(1., 2., .5), (1., 2., 3., .5, 0.3333),
-                                                                     (1., 2., 3., .5, 0.3333),
-                                                                     (1., 2., 3., .5, 0.3333), (1., 2., .5),
-                                                                     (1., 2., .5)],
-                                                      layer_steps=[8, 16, 32, 64, 100, 300], )
-    # all_anchors shape:[num_all_defualt_anchors,]  8732= 38*38*(3*6+6)+ .....
-    all_anchors, all_num_anchors_depth, all_num_anchors_spatial = anchor_creator.get_all_anchors()
-    # Serialization anchors
-    global global_anchor_info
-    global_anchor_info["all_anchors"] = all_anchors
-    global_anchor_info["all_num_anchors_depth"] = all_num_anchors_depth
-    global_anchor_info["all_num_anchors_spatial"] = all_num_anchors_spatial
 
-    image_preprocessing_fn = lambda image_, labels_, bboxes_: ssd_preprocessing.preprocess_image(image_, labels_,
-                                                                                                 bboxes_, out_shape,
-                                                                                                 is_training=is_training,
-                                                                                                 data_format=data_format,
-                                                                                                 output_rgb=False)
-    dataset = build_dataset(class_list=class_list,file_pattern=file_pattern,
-                            is_training=is_training,
-                            batch_size=batch_size,
-                            image_preprocessing_fn=image_preprocessing_fn,
-                            num_readers=num_readers,data_format=data_format,)
-    return dataset
 
 def input_pipeline(class_list=None,file_pattern='train-*', is_training=True, batch_size=None,data_format='channels_first',num_readers=2):
     def input_fn(params=None):
@@ -263,7 +232,7 @@ if __name__ == '__main__':
     eval_input_pattern = '/home/dxfang/dataset/tfrecords/pascal_voc/val-000*'
     taskA_class_list = list(range(1, 11))
     taskB_class_list = list(range(11, 21))
-    dataset = input_pipeline(class_list=None,file_pattern=train_input_pattern, is_training=False, batch_size=16)()
+    dataset = input_pipeline(class_list=None,file_pattern=eval_input_pattern, is_training=False, batch_size=16)()
     iterator = dataset.make_one_shot_iterator()
     with tf.Session() as sess:
         features, labels = iterator.get_next()
@@ -273,13 +242,14 @@ if __name__ == '__main__':
         groundtruth_boxes = labels['groundtruth_boxes']
         original_image_spatial_shape = labels['original_image_spatial_shape']
         true_image_shape = labels['true_image_shape']
-        print(groundtruth_classes)
-        # unpadding  num_boxes dimension for real num_groundtruth_boxes
-        groundtruth_classes = unpad_tensor(groundtruth_classes, num_groundtruth_boxes)
-        groundtruth_boxes = unpad_tensor(groundtruth_boxes, num_groundtruth_boxes)
-
-        groundtruth_classes_, groundtruth_boxes_ = sess.run([groundtruth_classes,groundtruth_boxes])
-        print(groundtruth_classes_)
+        print(sess.run(labels['filename']))
+        # print(groundtruth_classes)
+        # # unpadding  num_boxes dimension for real num_groundtruth_boxes
+        # groundtruth_classes = unpad_tensor(groundtruth_classes, num_groundtruth_boxes)
+        # groundtruth_boxes = unpad_tensor(groundtruth_boxes, num_groundtruth_boxes)
+        #
+        # groundtruth_classes_, groundtruth_boxes_ = sess.run([groundtruth_classes,groundtruth_boxes])
+        # print(groundtruth_classes_)
 
 
 

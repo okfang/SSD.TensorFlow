@@ -55,6 +55,7 @@ tf.app.flags.DEFINE_integer(
 # '2019-03-19-18-42-51_bn_wo_l2_loss'
 # '2019-03-21-13-32-46_w_pretrained_wo_bn'
 # '2019-03-23-15-58-36_w_bn_w_pretrianed'
+# 'pretrained_ssd'
 save_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
 model_dir_string = os.path.join('./logs','pretrained_ssd')
 tf.app.flags.DEFINE_string(
@@ -183,9 +184,9 @@ def main(_):
         keep_checkpoint_max=5).replace(
         tf_random_seed=FLAGS.tf_random_seed).replace(
         log_step_count_steps=FLAGS.log_every_n_steps)\
-        .replace(
-        train_distribute=distribute_strategy
-    )
+    #     .replace(
+    #     train_distribute=distribute_strategy
+    # )
 
     # replicate_ssd_model_fn =
     # ws = tf.estimator.WarmStartSettings(ckpt_to_initialize_from=FLAGS.checkpoint_path,
@@ -232,7 +233,10 @@ def main(_):
             'max_boxes_to_draw': FLAGS.max_boxes_to_draw,
             'min_score_thresh': FLAGS.min_score_thresh,
             # distillation
-            'distillation': False
+            'distillation': False,
+            'is_tack_A':False,
+            'is_tack_B':False
+
         })
 
     # log tensor
@@ -265,15 +269,16 @@ def main(_):
     eval_input_pattern ='/home/dxfang/dataset/tfrecords/pascal_voc/val-000*'
 
     print('Starting a training cycle.')
-    taskA_class_list =  list(range(1,11))
-    taskB_class_list =  list(range(11,21))
+    task_A_list = list(range(1,11))
+    task_B_list = list(range(11,21))
+    task_A_list = None
     train_spec = tf.estimator.TrainSpec(
-        input_fn=input_pipeline(class_list=None,file_pattern=train_input_pattern, is_training=True, batch_size=FLAGS.batch_size),
+        input_fn=input_pipeline(class_list=task_A_list,file_pattern=train_input_pattern, is_training=True, batch_size=FLAGS.batch_size),
         max_steps=FLAGS.max_number_of_steps,
         hooks= [train_logging_hook],
     )
     eval_spec = tf.estimator.EvalSpec(
-        input_fn=input_pipeline(class_list=None,file_pattern=eval_input_pattern, is_training=False, batch_size=FLAGS.batch_size,num_readers=1),
+        input_fn=input_pipeline(class_list=task_A_list,file_pattern=eval_input_pattern, is_training=False, batch_size=FLAGS.batch_size,num_readers=1),
         hooks=[eval_logging_hook],
         steps=100,
     )
@@ -286,12 +291,12 @@ def main(_):
 
     # tf.estimator.train_and_evaluate(ssd_detector,train_spec,eval_spec)
 
-    ssd_detector.evaluate(input_fn=input_pipeline(file_pattern=eval_input_pattern,
-                                                  is_training=False,
-                                                  batch_size=FLAGS.batch_size,
-                                                  num_readers=1),
-                          hooks=[eval_logging_hook],
-                          )
+    # ssd_detector.evaluate(input_fn=input_pipeline(file_pattern=eval_input_pattern,
+    #                                               is_training=False,
+    #                                               batch_size=FLAGS.batch_size,
+    #                                               num_readers=1),
+    #                       hooks=[eval_logging_hook],
+    #                       )
 
     print('Starting a predict cycle.')
     predict_dir = os.path.join(FLAGS.model_dir, 'predict')
