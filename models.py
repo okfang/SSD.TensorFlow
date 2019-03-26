@@ -245,6 +245,10 @@ def ssd_model_fn(features, labels, mode, params):
     # calculate the number of anchors of each feature layer.
     num_anchors_per_layer = [depth * spatial for depth, spatial in zip(all_num_anchors_depth, all_num_anchors_spatial)]
 
+    # for prediction
+    filename = labels['filename']
+    shape = labels['true_image_shape']
+
     # get and process input
     num_groundtruth_boxes = labels['num_groundtruth_boxes']
     groundtruth_classes = labels['groundtruth_classes']
@@ -287,6 +291,7 @@ def ssd_model_fn(features, labels, mode, params):
     # location_pred -> shape: [batch_size,num_all_anchors,4]
     cls_pred, location_pred = predict(features,mode,params,all_num_anchors_depth)
 
+
     # decode boxes  这里可能有问题？ bboxes_pred 的所有anchors 是按照feature layer的顺序排列的
 
     # bboxes_pred ->shape: [[batch_size,num_all_anchors,4],[][][][][]]
@@ -318,10 +323,7 @@ def ssd_model_fn(features, labels, mode, params):
             tf.identity(cls_accuracy[1], name='cls_accuracy')
             tf.summary.scalar('cls_accuracy', cls_accuracy[1])
 
-            metrics = {'cls_accuracy': cls_accuracy}
-
     # losses
-
     cross_entropy, loc_loss, l2_loss = build_losses(cls_targets=flatten_cls_targets_hard_exam_mining,
                                                     cls_pred=flatten_cls_pred_hard_exam_mining,
                                                     loc_targets=flatten_loc_targets_hard_exam_mining,
@@ -329,15 +331,30 @@ def ssd_model_fn(features, labels, mode, params):
                                                     params=params)
     total_loss = tf.add_n([cross_entropy, loc_loss, l2_loss], name='total_loss')
 
-    if mode in (tf.estimator.ModeKeys.EVAL, tf.estimator.ModeKeys.PREDICT):
-        with tf.name_scope("post_processing"):
-            post_process_for_single_example = functools.partial(per_image_post_process,num_classes=params['num_classes'],
-                                                                                       select_threshold=params['select_threshold'],
-                                                                                       min_size=params['min_size'],
-                                                                                       keep_topk=params['keep_topk'],
-                                                                                       nms_topk=params['nms_topk'],
-                                                                                       nms_threshold=params['nms_threshold'])
 
+
+
+    with tf.name_scope("post_processing"):
+        post_process_for_single_example = functools.partial(per_image_post_process,num_classes=params['num_classes'],
+                                                                                   select_threshold=params['select_threshold'],
+                                                                                   min_size=params['min_size'],
+                                                                                   keep_topk=params['keep_topk'],
+                                                                                   nms_topk=params['nms_topk'],
+                                                                                   nms_threshold=params['nms_threshold'])
+
+        if mode == tf.estimator.ModeKeys.PREDICT:
+            selected_scores,selected_bboxes = post_process_for_single_example(cls_pred, bboxes_pred)
+            predictions = {'filename': filename, 'shape': shape}
+            for class_ind in range(1, params['num_classes']):
+                predictions['scores_{}'.format(class_ind)] = tf.expand_dims(selected_scores[class_ind], axis=0)
+                predictions['bboxes_{}'.format(class_ind)] = tf.expand_dims(selected_bboxes[class_ind], axis=0)
+            return tf.estimator.EstimatorSpec(
+                mode=mode,
+                predictions=predictions,
+                loss=None, train_op=None)
+
+        metrics = {}
+        if mode == tf.estimator.ModeKeys.EVAL:
             cls_pred_list = tf.unstack(cls_pred)
             bboxes_pred_list = tf.unstack(bboxes_pred)
             detection_boxes_list = []
@@ -404,6 +421,7 @@ def ssd_model_fn(features, labels, mode, params):
             evaluator = eval_util.get_evaluators(categories,eval_metric_fn_key=params["eval_metric_fn_key"])
             eval_metric_ops = evaluator.get_estimator_eval_metric_ops(eval_input_dict)
             metrics.update(eval_metric_ops)
+
 
     if mode == tf.estimator.ModeKeys.TRAIN:
         # distillate knowledge

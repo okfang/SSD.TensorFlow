@@ -130,10 +130,12 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
 
         labels = {'original_image_spatial_shape': original_image_spatial_shape,
                   'true_image_shape': true_image_shape,
+                  'original_shape':original_shape,
                   'num_groundtruth_boxes': num_groundtruth_boxes,
                   'groundtruth_boxes': groundtruth_boxes,
                   'groundtruth_classes': groundtruth_classes,
-                  'key': key}
+                  'key': key,
+                  'filename':filename}
 
         if not is_training:
             labels['original_image'] = image_before_normalization

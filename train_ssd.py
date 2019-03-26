@@ -20,6 +20,7 @@ import os
 import sys
 import time
 
+import numpy as np
 import tensorflow as tf
 
 from models import ssd_model_fn
@@ -55,7 +56,7 @@ tf.app.flags.DEFINE_integer(
 # '2019-03-21-13-32-46_w_pretrained_wo_bn'
 # '2019-03-23-15-58-36_w_bn_w_pretrianed'
 save_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-model_dir_string = os.path.join('./logs','2019-03-23-15-58-36_w_pretrianed_wo_bn')
+model_dir_string = os.path.join('./logs','pretrained_ssd')
 tf.app.flags.DEFINE_string(
     'model_dir', model_dir_string,
     'The directory where the model will be stored.')
@@ -140,9 +141,9 @@ tf.app.flags.DEFINE_float(
 tf.app.flags.DEFINE_float(
     'nms_threshold', 0.45, 'Matching threshold in NMS algorithm.')
 tf.app.flags.DEFINE_integer(
-    'nms_topk', 200, 'Number of total object to keep after NMS.')
+    'nms_topk', 200, 'Number of total object per class to keep after NMS.')
 tf.app.flags.DEFINE_integer(
-    'keep_topk', 400, 'Number of total object to keep for each image before nms.')
+    'keep_topk', 400, 'Number of total object to keep for each class before nms.')
 
 # visualization realted configuration
 tf.app.flags.DEFINE_integer(
@@ -219,12 +220,13 @@ def main(_):
             # evaluation
             'select_threshold': FLAGS.select_threshold,
             'min_size': FLAGS.min_size,
-            'nms_threshold': FLAGS.nms_threshold,
+            # 'nms_threshold': FLAGS.nms_threshold,
+            'nms_threshold': 0.9,
             'nms_topk': FLAGS.nms_topk,
             'keep_topk': FLAGS.keep_topk,
-            'eval_metric_fn_key': "coco_detection_metrics",
-            # 'eval_metric_fn_key': "pascal_voc_detection_metrics",
-            'pad_nms_detections': 100,
+            # 'eval_metric_fn_key': "coco_detection_metrics",
+            'eval_metric_fn_key': "pascal_voc_detection_metrics",
+            'pad_nms_detections': 4000,
             # visualize
             'max_examples_to_draw': FLAGS.max_examples_to_draw,
             'max_boxes_to_draw': FLAGS.max_boxes_to_draw,
@@ -282,15 +284,46 @@ def main(_):
     #     hooks=[train_logging_hook]
     # )
 
-    tf.estimator.train_and_evaluate(ssd_detector,train_spec,eval_spec)
+    # tf.estimator.train_and_evaluate(ssd_detector,train_spec,eval_spec)
 
-    # ssd_detector.evaluate(input_fn=input_pipeline(file_pattern=eval_input_pattern,
-    #                                               is_training=False,
-    #                                               batch_size=FLAGS.batch_size,
-    #                                               num_readers=1),
-    #                       hooks=[eval_logging_hook],
-    #                       steps=155
-    #                       )
+    ssd_detector.evaluate(input_fn=input_pipeline(file_pattern=eval_input_pattern,
+                                                  is_training=False,
+                                                  batch_size=FLAGS.batch_size,
+                                                  num_readers=1),
+                          hooks=[eval_logging_hook],
+                          )
+
+    print('Starting a predict cycle.')
+    predict_dir = os.path.join(FLAGS.model_dir, 'predict')
+    pred_results = ssd_detector.predict(
+        input_fn=input_pipeline(file_pattern=eval_input_pattern, is_training=False, batch_size=1),
+       )  # , yield_single_examples=False)
+
+    det_results = list(pred_results)
+    # print(list(det_results))
+
+    # [{'bboxes_1': array([[0.        , 0.        , 0.28459054, 0.5679505 ], [0.3158835 , 0.34792888, 0.7312541 , 1.        ]], dtype=float32), 'scores_17': array([0.01333667, 0.01152573], dtype=float32), 'filename': b'000703.jpg', 'shape': array([334, 500,   3])}]
+    for class_ind in range(1, FLAGS.num_classes):
+        with open(os.path.join(predict_dir, 'results_{}.txt'.format(class_ind)), 'wt') as f:
+            for image_ind, pred in enumerate(det_results):
+                filename = pred['filename']
+                shape = pred['shape']
+                scores = pred['scores_{}'.format(class_ind)]
+                bboxes = pred['bboxes_{}'.format(class_ind)]
+                bboxes[:, 0] = (bboxes[:, 0] * shape[0]).astype(np.int32, copy=False) + 1
+                bboxes[:, 1] = (bboxes[:, 1] * shape[1]).astype(np.int32, copy=False) + 1
+                bboxes[:, 2] = (bboxes[:, 2] * shape[0]).astype(np.int32, copy=False) + 1
+                bboxes[:, 3] = (bboxes[:, 3] * shape[1]).astype(np.int32, copy=False) + 1
+
+                valid_mask = np.logical_and((bboxes[:, 2] - bboxes[:, 0] > 0), (bboxes[:, 3] - bboxes[:, 1] > 0))
+
+                for det_ind in range(valid_mask.shape[0]):
+                    if not valid_mask[det_ind]:
+                        continue
+                    f.write('{:s} {:.3f} {:.1f} {:.1f} {:.1f} {:.1f}\n'.
+                            format(filename.decode('utf8')[:-4], scores[det_ind],
+                                   bboxes[det_ind, 1], bboxes[det_ind, 0],
+                                   bboxes[det_ind, 3], bboxes[det_ind, 2]))
 
     # distillation
     # class_for_use = range(1,FLAGS.step1_classes+1)
