@@ -36,7 +36,7 @@ def read_dataset(file_read_func, file_pattern,is_training=True, num_readers=2):
     return records_dataset
 
 
-def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size=32,image_preprocessing_fn=None,num_readers=2,data_format="channels_first",):
+def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size=32,image_preprocessing_fn=None,num_readers=2,data_format='channels_first'):
 
     # Features in Pascal VOC TFRecords.
     keys_to_features = {
@@ -129,19 +129,20 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
         features = {
             'preprocessed_image':preprocessed_image,
             'filename': filename,
-            'original_shape': original_shape
+            'original_shape': original_shape,
+            'original_image_spatial_shape': original_image_spatial_shape,
+            'true_image_shape': true_image_shape,
+            'key': key
         }
-        labels = {'original_image_spatial_shape': original_image_spatial_shape,
-                  'true_image_shape': true_image_shape,
+        labels = {
                   'num_groundtruth_boxes': num_groundtruth_boxes,
                   'groundtruth_boxes': groundtruth_boxes,
-                  'key': key,
                   'groundtruth_classes': groundtruth_classes,
 
                   }
 
         if not is_training:
-            labels['original_image'] = image_before_normalization
+            features['original_image'] = image_before_normalization
 
         return features, labels
 
@@ -197,7 +198,8 @@ def input_pipeline(class_list=None,file_pattern='train-*', is_training=True, bat
                                 is_training=is_training,
                                 batch_size=batch_size,
                                 image_preprocessing_fn=image_preprocessing_fn,
-                                num_readers = num_readers)
+                                num_readers = num_readers,
+                                data_format=data_format)
         return dataset
 
     return input_fn

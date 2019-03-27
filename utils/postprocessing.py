@@ -141,7 +141,7 @@ def per_image_post_process(cls_pred, bboxes_pred,mode,select_threshold=None, min
             each_classes_detections.append(num_detections)
 
         if mode == tf.estimator.ModeKeys.PREDICT:
-            return select_bboxes, selected_scores
+            return selected_bboxes, selected_scores
         # concat all classes
         per_image_detection_boxes = tf.concat(per_image_detection_boxes,axis=0)
         per_image_detection_scores = tf.concat(per_image_detection_scores,axis=0)

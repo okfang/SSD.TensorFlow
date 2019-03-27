@@ -57,7 +57,7 @@ tf.app.flags.DEFINE_integer(
 # '2019-03-23-15-58-36_w_bn_w_pretrianed'
 # 'pretrained_ssd'
 save_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-model_dir_string = os.path.join('./logs','pretrained_ssd')
+model_dir_string = os.path.join('./logs','2019-03-18-10-16-20_bn_wo_l2_loss')
 tf.app.flags.DEFINE_string(
     'model_dir', model_dir_string,
     'The directory where the model will be stored.')
@@ -84,7 +84,7 @@ tf.app.flags.DEFINE_integer(
     'batch_size',16,
     'Batch size for training and evaluation.')
 tf.app.flags.DEFINE_string(
-    'data_format', 'channels_first',  # 'channels_first' or 'channels_last'
+    'data_format', 'channels_last',  # 'channels_first' or 'channels_last'
     'A flag to override the data format used in the model. channels_first '
     'provides a performance boost on GPU but is not always compatible '
     'with CPU. If left unspecified, the data format will be chosen '
@@ -188,9 +188,6 @@ def main(_):
     #     train_distribute=distribute_strategy
     # )
 
-    # replicate_ssd_model_fn =
-    # ws = tf.estimator.WarmStartSettings(ckpt_to_initialize_from=FLAGS.checkpoint_path,
-    #                                     vars_to_warm_start=[""])
     ssd_detector = tf.estimator.Estimator(
         model_fn=ssd_model_fn, model_dir=FLAGS.model_dir, config=run_config,
         params={
@@ -209,9 +206,9 @@ def main(_):
             'end_learning_rate': FLAGS.end_learning_rate,
             'decay_boundaries': parse_comma_list(FLAGS.decay_boundaries),
             'lr_decay_factors': parse_comma_list(FLAGS.lr_decay_factors),
-            'backbone_batch_normal': False,
-            'additional_batch_normal':False,
-            'bn_detection_head':False,
+            'backbone_batch_normal': True,
+            'additional_batch_normal':True,
+            'bn_detection_head':True,
             # init_fn
             'model_dir': FLAGS.model_dir,
             'checkpoint_path': FLAGS.checkpoint_path,
@@ -221,8 +218,8 @@ def main(_):
             # evaluation
             'select_threshold': FLAGS.select_threshold,
             'min_size': FLAGS.min_size,
-            # 'nms_threshold': FLAGS.nms_threshold,
-            'nms_threshold': 0.9,
+            'nms_threshold': FLAGS.nms_threshold,
+            # 'nms_threshold': 0.6,
             'nms_topk': FLAGS.nms_topk,
             'keep_topk': FLAGS.keep_topk,
             # 'eval_metric_fn_key': "coco_detection_metrics",
@@ -246,9 +243,9 @@ def main(_):
         'loc': 'location_loss',
         'loss': 'total_loss',
         'l2': 'l2_loss',
-        'acc': 'post_forward/cls_accuracy',
-        'num_positives': 'post_forward/hard_example_mining/num_positives',
-        'num_negatives_selected': 'post_forward/hard_example_mining/num_negatives_select'
+        'acc': 'cls_accuracy',
+        'num_positives': 'hard_example_mining/num_positives',
+        'num_negatives_selected': 'hard_example_mining/num_negatives_select'
     }
     train_logging_hook = tf.train.LoggingTensorHook(tensors=train_tensors_to_log, every_n_iter=FLAGS.log_every_n_steps,
                                               formatter = lambda dicts: (', '.join(['%s=%.6f' % (k, v) for k, v in dicts.items()])))
@@ -257,10 +254,10 @@ def main(_):
         'loc': 'location_loss',
         'loss': 'total_loss',
         'l2': 'l2_loss',
-        'acc': 'post_forward/cls_accuracy',
-        'num_positives': 'post_forward/hard_example_mining/num_positives',
-        'num_negatives_selected': 'post_forward/hard_example_mining/num_negatives_select',
-        'num_detections_after_nms': 'post_processing/num_detections_after_nms'
+        'acc': 'cls_accuracy',
+        'num_positives': 'hard_example_mining/num_positives',
+        'num_negatives_selected': 'hard_example_mining/num_negatives_select',
+        'num_detections_after_nms': 'evaluation_scope/num_detections_after_nms'
     }
     eval_logging_hook = tf.train.LoggingTensorHook(tensors=eval_tensors_to_log, every_n_iter=FLAGS.log_every_n_steps,
                                                    formatter=lambda dicts: (', '.join(['%s=%.6f' % (k, v) for k, v in dicts.items()])))
@@ -273,12 +270,12 @@ def main(_):
     task_B_list = list(range(11,21))
     task_A_list = None
     train_spec = tf.estimator.TrainSpec(
-        input_fn=input_pipeline(class_list=task_A_list,file_pattern=train_input_pattern, is_training=True, batch_size=FLAGS.batch_size),
+        input_fn=input_pipeline(class_list=task_A_list,file_pattern=train_input_pattern, is_training=True, batch_size=FLAGS.batch_size,data_format=FLAGS.data_format),
         max_steps=FLAGS.max_number_of_steps,
         hooks= [train_logging_hook],
     )
     eval_spec = tf.estimator.EvalSpec(
-        input_fn=input_pipeline(class_list=task_A_list,file_pattern=eval_input_pattern, is_training=False, batch_size=FLAGS.batch_size,num_readers=1),
+        input_fn=input_pipeline(class_list=task_A_list,file_pattern=eval_input_pattern, is_training=False, batch_size=FLAGS.batch_size,data_format=FLAGS.data_format,num_readers=1),
         hooks=[eval_logging_hook],
         steps=100,
     )
@@ -290,19 +287,22 @@ def main(_):
     # )
 
     # tf.estimator.train_and_evaluate(ssd_detector,train_spec,eval_spec)
-
+    #
     # ssd_detector.evaluate(input_fn=input_pipeline(file_pattern=eval_input_pattern,
     #                                               is_training=False,
     #                                               batch_size=FLAGS.batch_size,
+    #                                               data_format=FLAGS.data_format,
     #                                               num_readers=1),
     #                       hooks=[eval_logging_hook],
     #                       )
 
     print('Starting a predict cycle.')
     predict_dir = os.path.join(FLAGS.model_dir, 'predict')
+    if not os.path.isdir(predict_dir):
+        os.mkdir(predict_dir)
     pred_results = ssd_detector.predict(
-        input_fn=input_pipeline(file_pattern=eval_input_pattern, is_training=False, batch_size=1),
-       )  # , yield_single_examples=False)
+        input_fn=input_pipeline(file_pattern=eval_input_pattern, is_training=False, batch_size=1,data_format=FLAGS.data_format),
+    )
 
     det_results = list(pred_results)
     # print(list(det_results))
@@ -315,6 +315,7 @@ def main(_):
                 shape = pred['shape']
                 scores = pred['scores_{}'.format(class_ind)]
                 bboxes = pred['bboxes_{}'.format(class_ind)]
+
                 bboxes[:, 0] = (bboxes[:, 0] * shape[0]).astype(np.int32, copy=False) + 1
                 bboxes[:, 1] = (bboxes[:, 1] * shape[1]).astype(np.int32, copy=False) + 1
                 bboxes[:, 2] = (bboxes[:, 2] * shape[0]).astype(np.int32, copy=False) + 1

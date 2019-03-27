@@ -256,6 +256,10 @@ def ssd_model_fn(features, labels, mode, params):
     # for prediction
     shape = features['original_shape']
     filename = features['filename']
+    original_image_spatial_shape = features['original_image_spatial_shape']
+    true_image_shape = features['true_image_shape']
+    original_image = features['original_image']
+    key = features["key"]
 
 
 
@@ -274,30 +278,6 @@ def ssd_model_fn(features, labels, mode, params):
                                   all_anchors=all_anchors,
                                   num_anchors_per_layer=num_anchors_per_layer)
 
-    # get and process input
-    num_groundtruth_boxes = labels['num_groundtruth_boxes']
-    groundtruth_classes = labels['groundtruth_classes']
-    groundtruth_boxes = labels['groundtruth_boxes']
-    original_image_spatial_shape = labels['original_image_spatial_shape']
-    true_image_shape = labels['true_image_shape']
-
-    # unpadding  num_boxes dimension for real num_groundtruth_boxes
-    unpaded_groundtruth_classes = unpad_tensor(groundtruth_classes, num_groundtruth_boxes)
-    unpaded_groundtruth_boxes = unpad_tensor(groundtruth_boxes, num_groundtruth_boxes)
-
-    # construct train example
-    loc_targets_list, cls_targets_list, matched_iou_scores_list = [], [], []
-    for _groundtruth_classes, _groundtruth_boxes in zip(unpaded_groundtruth_classes,unpaded_groundtruth_boxes):
-        loc_target, cls_target, matched_iou_score = anchor_encoder_fn(labels=_groundtruth_classes, bboxes=_groundtruth_boxes)
-        loc_targets_list.append(loc_target)
-        cls_targets_list.append(cls_target)
-        matched_iou_scores_list.append(matched_iou_score)
-    # loc_targets ->shape: [batch_size, num_all_anchors,4]
-    # cls_targets ->shape: [batch_size, num_all_anchors]
-    # matched_iou_scores ->shape: [batch_size, num_all_anchors]
-    loc_targets = tf.stack(loc_targets_list,axis=0)
-    cls_targets = tf.stack(cls_targets_list,axis=0)
-    matched_iou_scores = tf.stack(matched_iou_scores_list,axis=0)
 
     # cls_pred -> shape: [batch_size,num_all_anchors,21]
     # location_pred -> shape: [batch_size,num_all_anchors,4]
@@ -311,31 +291,78 @@ def ssd_model_fn(features, labels, mode, params):
     # calculate accuracy
     with tf.control_dependencies([cls_pred, location_pred]):
         with tf.name_scope('post_forward'):
-            # hard example mining
-            final_mask, positive_mask = hard_example_mining(cls_targets, cls_pred, params)
-            # flatten targets
-            flatten_cls_targets = tf.reshape(cls_targets, [-1])
-            flatten_loc_targets = tf.reshape(loc_targets, [-1, 4])
-            # flatten preds
-            flatten_cls_pred = tf.reshape(cls_pred, [-1, params['num_classes']])
-            flatten_location_pred = tf.reshape(location_pred, [-1, 4])
-            # apply hard_example_mining
-            flatten_cls_pred_hard_exam_mining = tf.boolean_mask(flatten_cls_pred, final_mask)
-            flatten_location_pred_hard_exam_mining = tf.boolean_mask(flatten_location_pred,
-                                                                     tf.stop_gradient(positive_mask))
-            flatten_cls_targets_hard_exam_mining = tf.boolean_mask(
-                tf.clip_by_value(flatten_cls_targets, 0, params['num_classes']),
-                final_mask)
-            flatten_loc_targets_hard_exam_mining = tf.stop_gradient(tf.boolean_mask(flatten_loc_targets, positive_mask))
+            post_process_for_single_example = functools.partial(per_image_post_process,
+                                                                select_threshold=params['select_threshold'],
+                                                                min_size=params['min_size'],
+                                                                keep_topk=params['keep_topk'],
+                                                                nms_topk=params['nms_topk'],
+                                                                nms_threshold=params['nms_threshold'],
+                                                                is_tack_A=params['is_tack_A'],
+                                                                is_task_B=params['is_tack_B']
+                                                                )
+    if mode == tf.estimator.ModeKeys.PREDICT:
 
-            # classification accuracy
-            cls_accuracy = tf.metrics.accuracy(flatten_cls_targets_hard_exam_mining,
-                                               tf.argmax(flatten_cls_pred_hard_exam_mining, axis=-1))
-            tf.identity(cls_accuracy[1], name='cls_accuracy')
-            tf.summary.scalar('cls_accuracy', cls_accuracy[1])
+        cls_pred = tf.reshape(cls_pred, [-1, params['num_classes']])
+        bboxes_pred = tf.reshape(bboxes_pred, [-1, 4])
+        # cls_pred = tf.squeeze(cls_pred, axis=0)
+        # bboxes_pred = tf.squeeze(bboxes_pred, axis=0)
+        selected_bboxes,selected_scores = post_process_for_single_example(cls_pred, bboxes_pred, mode)
+        predictions = {'filename': filename, 'shape': shape}
+        for class_ind in range(1, params['num_classes']):
+            predictions['scores_{}'.format(class_ind)] = tf.expand_dims(selected_scores[class_ind], axis=0)
+            predictions['bboxes_{}'.format(class_ind)] = tf.expand_dims(selected_bboxes[class_ind], axis=0)
+        return tf.estimator.EstimatorSpec(
+            mode=mode,
+            predictions=predictions,
+            loss=None, train_op=None)
 
+    # assignment target
+    num_groundtruth_boxes = labels['num_groundtruth_boxes']
+    groundtruth_classes = labels['groundtruth_classes']
+    groundtruth_boxes = labels['groundtruth_boxes']
+    # unpadding  num_boxes dimension for real num_groundtruth_boxes
+    unpaded_groundtruth_classes = unpad_tensor(groundtruth_classes, num_groundtruth_boxes)
+    unpaded_groundtruth_boxes = unpad_tensor(groundtruth_boxes, num_groundtruth_boxes)
+    # construct train example
+    loc_targets_list, cls_targets_list, matched_iou_scores_list = [], [], []
+    for _groundtruth_classes, _groundtruth_boxes in zip(unpaded_groundtruth_classes, unpaded_groundtruth_boxes):
+        loc_target, cls_target, matched_iou_score = anchor_encoder_fn(labels=_groundtruth_classes,
+                                                                      bboxes=_groundtruth_boxes)
+        loc_targets_list.append(loc_target)
+        cls_targets_list.append(cls_target)
+        matched_iou_scores_list.append(matched_iou_score)
+
+    # loc_targets ->shape: [batch_size, num_all_anchors,4]
+    # cls_targets ->shape: [batch_size, num_all_anchors]
+    # matched_iou_scores ->shape: [batch_size, num_all_anchors]
+    loc_targets = tf.stack(loc_targets_list, axis=0)
+    cls_targets = tf.stack(cls_targets_list, axis=0)
+    matched_iou_scores = tf.stack(matched_iou_scores_list, axis=0)
+
+    # hard example mining
+    final_mask, positive_mask = hard_example_mining(cls_targets, cls_pred, params)
+    # flatten targets
+    flatten_cls_targets = tf.reshape(cls_targets, [-1])
+    flatten_loc_targets = tf.reshape(loc_targets, [-1, 4])
+    # flatten preds
+    flatten_cls_pred = tf.reshape(cls_pred, [-1, params['num_classes']])
+    flatten_location_pred = tf.reshape(location_pred, [-1, 4])
+    # apply hard_example_mining
+    flatten_cls_pred_hard_exam_mining = tf.boolean_mask(flatten_cls_pred, final_mask)
+    flatten_location_pred_hard_exam_mining = tf.boolean_mask(flatten_location_pred,
+                                                             tf.stop_gradient(positive_mask))
+    flatten_cls_targets_hard_exam_mining = tf.boolean_mask(
+        tf.clip_by_value(flatten_cls_targets, 0, params['num_classes']),
+        final_mask)
+    flatten_loc_targets_hard_exam_mining = tf.stop_gradient(
+        tf.boolean_mask(flatten_loc_targets, positive_mask))
+
+    # classification accuracy
+    cls_accuracy = tf.metrics.accuracy(flatten_cls_targets_hard_exam_mining,
+                                       tf.argmax(flatten_cls_pred_hard_exam_mining, axis=-1))
+    tf.identity(cls_accuracy[1], name='cls_accuracy')
+    tf.summary.scalar('cls_accuracy', cls_accuracy[1])
     # losses
-
     cross_entropy, loc_loss, l2_loss = build_losses(cls_targets=flatten_cls_targets_hard_exam_mining,
                                                     cls_pred=flatten_cls_pred_hard_exam_mining,
                                                     loc_targets=flatten_loc_targets_hard_exam_mining,
@@ -343,44 +370,22 @@ def ssd_model_fn(features, labels, mode, params):
                                                     params=params)
     total_loss = tf.add_n([cross_entropy, loc_loss, l2_loss], name='total_loss')
 
-    with tf.name_scope("post_processing"):
-        post_process_for_single_example = functools.partial(per_image_post_process,
-                                                           select_threshold=params['select_threshold'],
-                                                           min_size=params['min_size'],
-                                                           keep_topk=params['keep_topk'],
-                                                           nms_topk=params['nms_topk'],
-                                                           nms_threshold=params['nms_threshold'],
-                                                            is_tack_A=params['is_tack_A'],
-                                                            is_task_B=params['is_tack_B']
-                                                            )
-
-        if mode == tf.estimator.ModeKeys.PREDICT:
-            cls_pred = tf.squeeze(cls_pred,axis=0)
-            bboxes_pred = tf.squeeze(bboxes_pred,axis=0)
-            selected_scores,selected_bboxes = post_process_for_single_example(cls_pred, bboxes_pred,mode)
-            predictions = {'filename': filename, 'shape': shape}
-            for class_ind in range(1, params['num_classes']):
-                predictions['scores_{}'.format(class_ind)] = tf.expand_dims(selected_scores[class_ind], axis=0)
-                predictions['bboxes_{}'.format(class_ind)] = tf.expand_dims(selected_bboxes[class_ind], axis=0)
-            return tf.estimator.EstimatorSpec(
-                mode=mode,
-                predictions=predictions,
-                loss=None, train_op=None)
-
-        metrics = {}
-        if mode == tf.estimator.ModeKeys.EVAL:
+    #  evaluation
+    metrics = {}
+    if mode == tf.estimator.ModeKeys.EVAL:
+        with tf.name_scope("evaluation_scope"):
             cls_pred_list = tf.unstack(cls_pred)
             bboxes_pred_list = tf.unstack(bboxes_pred)
             detection_boxes_list = []
             detection_scores_list = []
             detection_classes_list = []
-            num_detections_list= []
-            for cls_pred_, bboxes_pred_ in zip(cls_pred_list,bboxes_pred_list):
-                detection_boxes, detection_scores,detection_classes,\
-                             num_detections = post_process_for_single_example(cls_pred_, bboxes_pred_,mode)
+            num_detections_list = []
+            for cls_pred_, bboxes_pred_ in zip(cls_pred_list, bboxes_pred_list):
+                detection_boxes, detection_scores, detection_classes, \
+                num_detections = post_process_for_single_example(cls_pred_, bboxes_pred_, mode)
 
                 # padding along num_detections dimension
-                detection_boxes = pad_or_clip_nd(detection_boxes, [params['pad_nms_detections'],4])
+                detection_boxes = pad_or_clip_nd(detection_boxes, [params['pad_nms_detections'], 4])
                 detection_scores = pad_or_clip_nd(detection_scores, [params['pad_nms_detections']])
                 detection_classes = pad_or_clip_nd(detection_classes, [params['pad_nms_detections']])
 
@@ -393,17 +398,17 @@ def ssd_model_fn(features, labels, mode, params):
             # detection_boxes -> shape: [batch_size,max_nms_detections，4]
             # detection_scores -> shape: [batch_size,max_nms_detections，]
             # detection_classes -> shape: [batch_size,max_nms_detections，]   labels: 1,2,...20
-            detection_boxes = tf.stack(detection_boxes_list,axis=0)
-            detection_scores = tf.stack(detection_scores_list,axis=0)
-            detection_classes = tf.cast(tf.stack(detection_classes_list,axis=0),tf.int32)
-            num_detections = tf.cast(tf.stack(num_detections_list,axis=0),tf.int32)
+            detection_boxes = tf.stack(detection_boxes_list, axis=0)
+            detection_scores = tf.stack(detection_scores_list, axis=0)
+            detection_classes = tf.cast(tf.stack(detection_classes_list, axis=0), tf.int32)
+            num_detections = tf.cast(tf.stack(num_detections_list, axis=0), tf.int32)
 
             tf.identity(num_detections[0], name="num_detections_after_nms")
 
             eval_input_dict = {
                 'original_image_spatial_shape': original_image_spatial_shape,
-                'true_image_shape':true_image_shape,
-                'original_image':labels['original_image'],
+                'true_image_shape': true_image_shape,
+                'original_image': original_image,
                 # goundtruths
                 'num_groundtruth_boxes_per_image': num_groundtruth_boxes,
                 'groundtruth_boxes': unpaded_groundtruth_boxes,
@@ -414,25 +419,26 @@ def ssd_model_fn(features, labels, mode, params):
                 'detection_classes': detection_classes,
                 "num_det_boxes_per_image": num_detections,
                 # image id
-                'key': labels["key"]
+                'key': key
             }
 
-            category_index = {VOC_LABELS[name][0]: {"id": VOC_LABELS[name][0], "name": name} for name in VOC_LABELS.keys()}
+            category_index = {VOC_LABELS[name][0]: {"id": VOC_LABELS[name][0], "name": name} for name in
+                              VOC_LABELS.keys()}
             categories = list(category_index.values())
             # visualization detections result
-            eval_metric_op_vis = visualization_utils.VisualizeSingleFrameDetections(
-                category_index,
-                max_examples_to_draw=params['max_examples_to_draw'],
-                max_boxes_to_draw=params['max_boxes_to_draw'],
-                min_score_thresh=params['min_score_thresh'],
-                use_normalized_coordinates=True)
-            vis_metric_ops = eval_metric_op_vis.get_estimator_eval_metric_ops(eval_input_dict)
-            metrics.update(vis_metric_ops)
+            # eval_metric_op_vis = visualization_utils.VisualizeSingleFrameDetections(
+            #     category_index,
+            #     max_examples_to_draw=params['max_examples_to_draw'],
+            #     max_boxes_to_draw=params['max_boxes_to_draw'],
+            #     min_score_thresh=params['min_score_thresh'],
+            #     use_normalized_coordinates=True)
+            # vis_metric_ops = eval_metric_op_vis.get_estimator_eval_metric_ops(eval_input_dict)
+            # metrics.update(vis_metric_ops)
 
             eval_input_dict['groundtruth_boxes'] = groundtruth_boxes
             eval_input_dict['groundtruth_classes'] = groundtruth_classes
             # eval metrics ops
-            evaluator = eval_util.get_evaluators(categories,eval_metric_fn_key=params["eval_metric_fn_key"])
+            evaluator = eval_util.get_evaluators(categories, eval_metric_fn_key=params["eval_metric_fn_key"])
             eval_metric_ops = evaluator.get_estimator_eval_metric_ops(eval_input_dict)
             metrics.update(eval_metric_ops)
 
