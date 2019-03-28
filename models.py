@@ -426,14 +426,14 @@ def ssd_model_fn(features, labels, mode, params):
                               VOC_LABELS.keys()}
             categories = list(category_index.values())
             # visualization detections result
-            # eval_metric_op_vis = visualization_utils.VisualizeSingleFrameDetections(
-            #     category_index,
-            #     max_examples_to_draw=params['max_examples_to_draw'],
-            #     max_boxes_to_draw=params['max_boxes_to_draw'],
-            #     min_score_thresh=params['min_score_thresh'],
-            #     use_normalized_coordinates=True)
-            # vis_metric_ops = eval_metric_op_vis.get_estimator_eval_metric_ops(eval_input_dict)
-            # metrics.update(vis_metric_ops)
+            eval_metric_op_vis = visualization_utils.VisualizeSingleFrameDetections(
+                category_index,
+                max_examples_to_draw=params['max_examples_to_draw'],
+                max_boxes_to_draw=params['max_boxes_to_draw'],
+                min_score_thresh=params['min_score_thresh'],
+                use_normalized_coordinates=True)
+            vis_metric_ops = eval_metric_op_vis.get_estimator_eval_metric_ops(eval_input_dict)
+            metrics.update(vis_metric_ops)
 
             eval_input_dict['groundtruth_boxes'] = groundtruth_boxes
             eval_input_dict['groundtruth_classes'] = groundtruth_classes
