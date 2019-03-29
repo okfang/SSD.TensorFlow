@@ -47,20 +47,6 @@ tf.app.flags.DEFINE_string(
     'The directory where the dataset input data is stored.')
 tf.app.flags.DEFINE_integer(
     'num_classes', 21, 'Number of classes to use in the dataset.')
-
-# '2019-03-12-16-08-41'
-# '2019-03-15-12-53-26'
-# '2019-03-15-16-39-59_bn'
-# '2019-03-18-10-16-20_bn_wo_l2_loss'
-# '2019-03-19-18-42-51_bn_wo_l2_loss'
-# '2019-03-21-13-32-46_w_pretrained_wo_bn'
-# '2019-03-23-15-58-36_w_bn_w_pretrianed'
-# 'pretrained_ssd'
-save_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-model_dir_string = os.path.join('./logs','2019-03-18-10-16-20_bn_wo_l2_loss')
-tf.app.flags.DEFINE_string(
-    'model_dir', model_dir_string,
-    'The directory where the model will be stored.')
 tf.app.flags.DEFINE_integer(
     'log_every_n_steps',50,
     'The frequency with which logs are printed.')
@@ -162,8 +148,21 @@ tf.app.flags.DEFINE_integer(
     'step2_classes',10,'Number of classes use for training second task'
 )
 
-FLAGS = tf.app.flags.FLAGS
+# '2019-03-12-16-08-41'
+# '2019-03-15-12-53-26'
+# '2019-03-15-16-39-59_bn'
+# '2019-03-18-10-16-20_bn_wo_l2_loss'
+# '2019-03-19-18-42-51_bn_wo_l2_loss'
+# '2019-03-21-13-32-46_w_pretrained_wo_bn'
+# '2019-03-23-15-58-36_w_bn_w_pretrianed'
+# 'pretrained_ssd'
+save_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
+model_dir_string = os.path.join('./logs','pretrained_ssd')
+tf.app.flags.DEFINE_string(
+    'model_dir', model_dir_string,
+    'The directory where the model will be stored.')
 
+FLAGS = tf.app.flags.FLAGS
 
 def parse_comma_list(args):
     return [float(s.strip()) for s in args.split(',')]
@@ -172,10 +171,8 @@ def main(_):
     # Using the Winograd non-fused algorithms provides a small performance boost.
     # gpu config
     os.environ['TF_ENABLE_WINOGRAD_NONFUSED'] = '1'
-
     # multi gpu training strategy
     distribute_strategy = tf.contrib.distribute.MirroredStrategy(num_gpus=2)
-
     # Set up a RunConfig to only save checkpoints once per training cycle.
     run_config = tf.estimator.RunConfig().replace(
         save_checkpoints_secs=FLAGS.save_checkpoints_secs).replace(
@@ -184,57 +181,59 @@ def main(_):
         keep_checkpoint_max=5).replace(
         tf_random_seed=FLAGS.tf_random_seed).replace(
         log_step_count_steps=FLAGS.log_every_n_steps)\
-    #     .replace(
-    #     train_distribute=distribute_strategy
-    # )
+        .replace(
+        train_distribute=distribute_strategy
+    )
+    estimator_params = {
+        # training
+        'num_gpus': 2,
+        'data_format': FLAGS.data_format,
+        'batch_size': FLAGS.batch_size,
+        'model_scope': FLAGS.model_scope,
+        'num_classes': FLAGS.num_classes,
+        'negative_ratio': FLAGS.negative_ratio,
+        'positive_threshold': FLAGS.positive_threshold,
+        'neg_threshold': FLAGS.neg_threshold,
+        'weight_decay': FLAGS.weight_decay,
+        'momentum': FLAGS.momentum,
+        'learning_rate': FLAGS.learning_rate,
+        'end_learning_rate': FLAGS.end_learning_rate,
+        'decay_boundaries': parse_comma_list(FLAGS.decay_boundaries),
+        'lr_decay_factors': parse_comma_list(FLAGS.lr_decay_factors),
+        # batch normalization
+        'backbone_batch_normal': False,
+        'additional_batch_normal': False,
+        'bn_detection_head': False,
+        # init_fn
+        'model_dir': FLAGS.model_dir,
+        'checkpoint_path': FLAGS.checkpoint_path,
+        'checkpoint_model_scope': FLAGS.checkpoint_model_scope,
+        'checkpoint_exclude_scopes': FLAGS.checkpoint_exclude_scopes,
+        'ignore_missing_vars': FLAGS.ignore_missing_vars,
+        # evaluation
+        'select_threshold': FLAGS.select_threshold,
+        'min_size': FLAGS.min_size,
+        'nms_threshold': FLAGS.nms_threshold,
+        'nms_topk': FLAGS.nms_topk,
+        'keep_topk': FLAGS.keep_topk,
+        # 'eval_metric_fn_key': "coco_detection_metrics",
+        'eval_metric_fn_key': "pascal_voc_detection_metrics",
+        'pad_nms_detections': 4000,
+        # visualize
+        'max_examples_to_draw': FLAGS.max_examples_to_draw,
+        'max_boxes_to_draw': FLAGS.max_boxes_to_draw,
+        'min_score_thresh': FLAGS.min_score_thresh,
+
+        # distillation
+        'distillation': False,
+        'is_tack_A': False,
+        'is_tack_B': False
+    }
 
     ssd_detector = tf.estimator.Estimator(
         model_fn=ssd_model_fn, model_dir=FLAGS.model_dir, config=run_config,
-        params={
-            # training
-            'num_gpus': 2,
-            'data_format': FLAGS.data_format,
-            'batch_size': FLAGS.batch_size,
-            'model_scope': FLAGS.model_scope,
-            'num_classes': FLAGS.num_classes,
-            'negative_ratio': FLAGS.negative_ratio,
-            'positive_threshold': FLAGS.positive_threshold,
-            'neg_threshold': FLAGS.neg_threshold,
-            'weight_decay': FLAGS.weight_decay,
-            'momentum': FLAGS.momentum,
-            'learning_rate': FLAGS.learning_rate,
-            'end_learning_rate': FLAGS.end_learning_rate,
-            'decay_boundaries': parse_comma_list(FLAGS.decay_boundaries),
-            'lr_decay_factors': parse_comma_list(FLAGS.lr_decay_factors),
-            'backbone_batch_normal': True,
-            'additional_batch_normal':True,
-            'bn_detection_head':True,
-            # init_fn
-            'model_dir': FLAGS.model_dir,
-            'checkpoint_path': FLAGS.checkpoint_path,
-            'checkpoint_model_scope': FLAGS.checkpoint_model_scope,
-            'checkpoint_exclude_scopes':FLAGS.checkpoint_exclude_scopes,
-            'ignore_missing_vars':FLAGS.ignore_missing_vars,
-            # evaluation
-            'select_threshold': FLAGS.select_threshold,
-            'min_size': FLAGS.min_size,
-            'nms_threshold': FLAGS.nms_threshold,
-            # 'nms_threshold': 0.6,
-            'nms_topk': FLAGS.nms_topk,
-            'keep_topk': FLAGS.keep_topk,
-            # 'eval_metric_fn_key': "coco_detection_metrics",
-            'eval_metric_fn_key': "pascal_voc_detection_metrics",
-            'pad_nms_detections': 4000,
-            # visualize
-            'max_examples_to_draw': FLAGS.max_examples_to_draw,
-            'max_boxes_to_draw': FLAGS.max_boxes_to_draw,
-            'min_score_thresh': FLAGS.min_score_thresh,
-            # distillation
-            'distillation': False,
-            'is_tack_A':False,
-            'is_tack_B':False
-
-        })
+        params=estimator_params
+        )
 
     # log tensor
     train_tensors_to_log = {
@@ -279,15 +278,20 @@ def main(_):
         hooks=[eval_logging_hook],
         steps=100,
     )
+
+    # tf.estimator.train_and_evaluate(ssd_detector,train_spec,eval_spec)
+
     # ssd_detector.train(
-    #     input_fn=input_pipeline(class_list=None, file_pattern=train_input_pattern, is_training=True,
+    #     input_fn=input_pipeline(class_list=None,
+    #                             file_pattern=train_input_pattern,
+    #                             is_training=True,
+    #                             data_format=FLAGS.data_format,
     #                             batch_size=FLAGS.batch_size),
     #     steps=1000,
     #     hooks=[train_logging_hook]
     # )
 
-    # tf.estimator.train_and_evaluate(ssd_detector,train_spec,eval_spec)
-    #
+
     # ssd_detector.evaluate(input_fn=input_pipeline(file_pattern=eval_input_pattern,
     #                                               is_training=False,
     #                                               batch_size=FLAGS.batch_size,
@@ -296,48 +300,44 @@ def main(_):
     #                       hooks=[eval_logging_hook],
     #                       )
 
-    print('Starting a predict cycle.')
-    predict_dir = os.path.join(FLAGS.model_dir, 'predict')
-    if not os.path.isdir(predict_dir):
-        os.mkdir(predict_dir)
-    pred_results = ssd_detector.predict(
-        input_fn=input_pipeline(file_pattern=eval_input_pattern, is_training=False, batch_size=1,data_format=FLAGS.data_format),
-    )
 
-    det_results = list(pred_results)
-    # print(list(det_results))
 
-    # [{'bboxes_1': array([[0.        , 0.        , 0.28459054, 0.5679505 ], [0.3158835 , 0.34792888, 0.7312541 , 1.        ]], dtype=float32), 'scores_17': array([0.01333667, 0.01152573], dtype=float32), 'filename': b'000703.jpg', 'shape': array([334, 500,   3])}]
-    for class_ind in range(1, FLAGS.num_classes):
-        with open(os.path.join(predict_dir, 'results_{}.txt'.format(class_ind)), 'wt') as f:
-            for image_ind, pred in enumerate(det_results):
-                filename = pred['filename']
-                shape = pred['shape']
-                scores = pred['scores_{}'.format(class_ind)]
-                bboxes = pred['bboxes_{}'.format(class_ind)]
+    predict = True
+    if predict:
+        print('Starting a predict cycle.')
+        predict_dir = os.path.join(FLAGS.model_dir, 'predict')
+        if not os.path.isdir(predict_dir):
+            os.mkdir(predict_dir)
+        pred_results = ssd_detector.predict(
+            input_fn=input_pipeline(file_pattern=eval_input_pattern, is_training=False, batch_size=1,
+                                    data_format=FLAGS.data_format),
+        )
+        det_results = list(pred_results)
+        # print(list(det_results))
 
-                bboxes[:, 0] = (bboxes[:, 0] * shape[0]).astype(np.int32, copy=False) + 1
-                bboxes[:, 1] = (bboxes[:, 1] * shape[1]).astype(np.int32, copy=False) + 1
-                bboxes[:, 2] = (bboxes[:, 2] * shape[0]).astype(np.int32, copy=False) + 1
-                bboxes[:, 3] = (bboxes[:, 3] * shape[1]).astype(np.int32, copy=False) + 1
+        # [{'bboxes_1': array([[0.        , 0.        , 0.28459054, 0.5679505 ], [0.3158835 , 0.34792888, 0.7312541 , 1.        ]], dtype=float32), 'scores_17': array([0.01333667, 0.01152573], dtype=float32), 'filename': b'000703.jpg', 'shape': array([334, 500,   3])}]
+        for class_ind in range(1, FLAGS.num_classes):
+            with open(os.path.join(predict_dir, 'results_{}.txt'.format(class_ind)), 'wt') as f:
+                for image_ind, pred in enumerate(det_results):
+                    filename = pred['filename']
+                    shape = pred['shape']
+                    scores = pred['scores_{}'.format(class_ind)]
+                    bboxes = pred['bboxes_{}'.format(class_ind)]
 
-                valid_mask = np.logical_and((bboxes[:, 2] - bboxes[:, 0] > 0), (bboxes[:, 3] - bboxes[:, 1] > 0))
+                    bboxes[:, 0] = (bboxes[:, 0] * shape[0]).astype(np.int32, copy=False) + 1
+                    bboxes[:, 1] = (bboxes[:, 1] * shape[1]).astype(np.int32, copy=False) + 1
+                    bboxes[:, 2] = (bboxes[:, 2] * shape[0]).astype(np.int32, copy=False) + 1
+                    bboxes[:, 3] = (bboxes[:, 3] * shape[1]).astype(np.int32, copy=False) + 1
 
-                for det_ind in range(valid_mask.shape[0]):
-                    if not valid_mask[det_ind]:
-                        continue
-                    f.write('{:s} {:.3f} {:.1f} {:.1f} {:.1f} {:.1f}\n'.
-                            format(filename.decode('utf8')[:-4], scores[det_ind],
-                                   bboxes[det_ind, 1], bboxes[det_ind, 0],
-                                   bboxes[det_ind, 3], bboxes[det_ind, 2]))
+                    valid_mask = np.logical_and((bboxes[:, 2] - bboxes[:, 0] > 0), (bboxes[:, 3] - bboxes[:, 1] > 0))
 
-    # distillation
-    # class_for_use = range(1,FLAGS.step1_classes+1)
-    # ssd_detector.train(input_fn=dist_input_fn(class_list=None,file_pattern=train_input_pattern,
-    #                                            is_training=True,
-    #                                            batch_size=FLAGS.batch_size),
-    #                    hooks=[train_logging_hook],
-    #                    max_steps=FLAGS.max_number_of_steps)
+                    for det_ind in range(valid_mask.shape[0]):
+                        if not valid_mask[det_ind]:
+                            continue
+                        f.write('{:s} {:.3f} {:.1f} {:.1f} {:.1f} {:.1f}\n'.
+                                format(filename.decode('utf8')[:-4], scores[det_ind],
+                                       bboxes[det_ind, 1], bboxes[det_ind, 0],
+                                       bboxes[det_ind, 3], bboxes[det_ind, 2]))
 
 if __name__ == '__main__':
     tf.logging.set_verbosity(tf.logging.INFO)

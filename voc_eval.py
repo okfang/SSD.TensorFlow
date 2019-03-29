@@ -34,7 +34,7 @@ VOC2007TEST
     ...
     ImageSets
 '''
-model_name = '2019-03-18-10-16-20_bn_wo_l2_loss'
+model_name = 'pretrained_ssd'
 dataset_path = '/home/dxfang/dataset/pascal_voc/voc2007_test'
 # change above path according to your system settings
 pred_path = './logs/{}/predict'.format(model_name)
