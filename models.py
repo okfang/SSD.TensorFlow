@@ -5,6 +5,7 @@ import tensorflow as tf
 import eval_util
 import inputs
 from net import ssd_net
+from net import se_ssd_net
 # from train_ssd import FLAGS
 from utils import anchor_manipulator, visualization_utils, scaffolds
 from utils.postprocessing import per_image_post_process
@@ -39,7 +40,9 @@ def get_init_fn(model_dir,checkpoint_path,model_scope,checkpoint_model_scope,che
     return scaffolds.get_init_fn_for_scaffold(model_dir, checkpoint_path,
                                               model_scope, checkpoint_model_scope,
                                               checkpoint_exclude_scopes, ignore_missing_vars,
-                                              name_remap={'/kernel': '/weights', '/bias': '/biases'})
+                                              name_remap={'/kernel': '/weights', '/bias': '/biases'},
+                                              # name_remap=None
+                                              )
 
 def modified_smooth_l1(bbox_pred, bbox_targets, bbox_inside_weights=1., bbox_outside_weights=1., sigma=1.):
     """
@@ -66,14 +69,15 @@ def modified_smooth_l1(bbox_pred, bbox_targets, bbox_inside_weights=1., bbox_out
 def predict(features,mode,params,all_num_anchors_depth):
     with tf.variable_scope(params["model_scope"], default_name=None, values=[features], reuse=tf.AUTO_REUSE):
         # get vgg16 net
-        backbone = ssd_net.VGG16Backbone(params['data_format'],backbone_batch_normal=params["backbone_batch_normal"],additional_batch_normal=params['additional_batch_normal'])
+        # model = ssd_net.VGG16Backbone(params['data_format'],backbone_batch_normal=params["backbone_batch_normal"],additional_batch_normal=params['additional_batch_normal'])
+        model = se_ssd_net.SE_SSD300_NET(params['data_format'],backbone_batch_normal=params["backbone_batch_normal"],additional_batch_normal=params['additional_batch_normal'])
         # return feature layers
         # feature_layers -> ['conv4','fc7','conv8','conv9','conv10','conv11']
-        feature_layers = backbone.forward(features, training=(mode == tf.estimator.ModeKeys.TRAIN))
+        feature_layers = model.forward(features, training=(mode == tf.estimator.ModeKeys.TRAIN))
 
         # location_pred -> [[batch_size, num_anchor_per_position*4, feature_map_size, feature_map_size,],[],[],[],[],[]]
         # cls_pred -> [[batch_size, num_anchor_per_position*21,   , feature_map_size,],[],[],[],[],[]]
-        location_pred, cls_pred = backbone.multibox_head(feature_layers, params['num_classes'], all_num_anchors_depth,
+        location_pred, cls_pred = model.multibox_head(feature_layers, params['num_classes'], all_num_anchors_depth,
                                                         data_format=params['data_format'],bn_detection_head=params['bn_detection_head'],
                                                          training=(mode == tf.estimator.ModeKeys.TRAIN))
 
@@ -207,7 +211,8 @@ def dist_build_losses(cls_targets=None,cls_pred=None, loc_targets=None,loc_pred=
 
 def build_distillation_loss(features,cls_pred,location_pred,mode,all_num_anchors_depth,params):
     with tf.variable_scope('distillation', values=[features]):
-        dist_backbone = ssd_net.VGG16Backbone(params['data_format'])
+        # dist_backbone = ssd_net.VGG16Backbone(params['data_format'])
+        dist_backbone = se_ssd_net.SE_SSD300_NET(params['data_format'])
         dist_feature_layers = dist_backbone.forward(features, training=(mode == tf.estimator.ModeKeys.TRAIN))
         dist_location_pred, dist_cls_pred = dist_backbone.multibox_head(dist_feature_layers, params['num_classes'],
                                                                   all_num_anchors_depth,
@@ -258,7 +263,6 @@ def ssd_model_fn(features, labels, mode, params):
     filename = features['filename']
     original_image_spatial_shape = features['original_image_spatial_shape']
     true_image_shape = features['true_image_shape']
-    original_image = features['original_image']
     key = features["key"]
 
 
@@ -301,7 +305,6 @@ def ssd_model_fn(features, labels, mode, params):
                                                                 is_task_B=params['is_tack_B']
                                                                 )
     if mode == tf.estimator.ModeKeys.PREDICT:
-
         cls_pred = tf.reshape(cls_pred, [-1, params['num_classes']])
         bboxes_pred = tf.reshape(bboxes_pred, [-1, 4])
         # cls_pred = tf.squeeze(cls_pred, axis=0)
@@ -320,6 +323,12 @@ def ssd_model_fn(features, labels, mode, params):
     num_groundtruth_boxes = labels['num_groundtruth_boxes']
     groundtruth_classes = labels['groundtruth_classes']
     groundtruth_boxes = labels['groundtruth_boxes']
+
+    #  revert normalize coordinate to absolute coordinate  for metircs
+    # scale = tf.cast(tf.expand_dims(tf.stack([shape[:,0],shape[:,1],shape[:,0],shape[:,1]],axis=1),axis=1),dtype=tf.float32)
+    # print(scale)
+    # groundtruth_boxes = tf.multiply(groundtruth_boxes,scale)
+
     # unpadding  num_boxes dimension for real num_groundtruth_boxes
     unpaded_groundtruth_classes = unpad_tensor(groundtruth_classes, num_groundtruth_boxes)
     unpaded_groundtruth_boxes = unpad_tensor(groundtruth_boxes, num_groundtruth_boxes)
@@ -380,9 +389,12 @@ def ssd_model_fn(features, labels, mode, params):
             detection_scores_list = []
             detection_classes_list = []
             num_detections_list = []
-            for cls_pred_, bboxes_pred_ in zip(cls_pred_list, bboxes_pred_list):
+            for ind,(cls_pred_, bboxes_pred_ )in enumerate(zip(cls_pred_list, bboxes_pred_list)):
                 detection_boxes, detection_scores, detection_classes, \
                 num_detections = post_process_for_single_example(cls_pred_, bboxes_pred_, mode)
+
+                # revert normalize coordinate to absolute coordinate  for metircs
+                # detection_boxes = tf.multiply(detection_boxes,[shape[ind][0],shape[ind][1],shape[ind][0],shape[ind][1]])+1
 
                 # padding along num_detections dimension
                 detection_boxes = pad_or_clip_nd(detection_boxes, [params['pad_nms_detections'], 4])
@@ -393,6 +405,10 @@ def ssd_model_fn(features, labels, mode, params):
                 detection_scores_list.append(detection_scores)
                 detection_classes_list.append(detection_classes)
                 num_detections_list.append(num_detections)
+
+            # revert normalize coordinate to absolute coordinate  for metircs
+            # scaled_unpaded_groundtruth_boxes = [tf.multiply(unpaded_groundtruth_box, [shape[ind][0], shape[ind][1], shape[ind][0], shape[ind][1]]) + 1
+            #                                                     for ind,unpaded_groundtruth_box in enumerate(unpaded_groundtruth_boxes)]
 
             # batched detections
             # detection_boxes -> shape: [batch_size,max_nms_detections，4]
@@ -408,7 +424,7 @@ def ssd_model_fn(features, labels, mode, params):
             eval_input_dict = {
                 'original_image_spatial_shape': original_image_spatial_shape,
                 'true_image_shape': true_image_shape,
-                'original_image': original_image,
+                'original_image': features['original_image'],
                 # goundtruths
                 'num_groundtruth_boxes_per_image': num_groundtruth_boxes,
                 'groundtruth_boxes': unpaded_groundtruth_boxes,
@@ -426,14 +442,14 @@ def ssd_model_fn(features, labels, mode, params):
                               VOC_LABELS.keys()}
             categories = list(category_index.values())
             # visualization detections result
-            eval_metric_op_vis = visualization_utils.VisualizeSingleFrameDetections(
-                category_index,
-                max_examples_to_draw=params['max_examples_to_draw'],
-                max_boxes_to_draw=params['max_boxes_to_draw'],
-                min_score_thresh=params['min_score_thresh'],
-                use_normalized_coordinates=True)
-            vis_metric_ops = eval_metric_op_vis.get_estimator_eval_metric_ops(eval_input_dict)
-            metrics.update(vis_metric_ops)
+            # eval_metric_op_vis = visualization_utils.VisualizeSingleFrameDetections(
+            #     category_index,
+            #     max_examples_to_draw=params['max_examples_to_draw'],
+            #     max_boxes_to_draw=params['max_boxes_to_draw'],
+            #     min_score_thresh=params['min_score_thresh'],
+            #     use_normalized_coordinates=False)
+            # vis_metric_ops = eval_metric_op_vis.get_estimator_eval_metric_ops(eval_input_dict)
+            # metrics.update(vis_metric_ops)
 
             eval_input_dict['groundtruth_boxes'] = groundtruth_boxes
             eval_input_dict['groundtruth_classes'] = groundtruth_classes

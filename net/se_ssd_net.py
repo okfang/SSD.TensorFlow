@@ -243,13 +243,13 @@ class SE_SSD300_NET(object):
     def squeeze_excitation_layer(self, inputs, layer_name,ratio=4):
         with tf.name_scope(layer_name):
             if self._data_format == 'channels_first':
-                out_dim = tf.shape(inputs)[1]
+                out_dim = inputs.shape.as_list()[1]
             else:
-                out_dim = tf.shape(inputs)[3]
+                out_dim = inputs.shape.as_list()[3]
             squeeze = self.global_average_pooling(inputs)
-            excitation = tf.layers.dense(squeeze, units=out_dim / ratio, layer_name=layer_name + '_fully_connected1')
+            excitation = tf.layers.dense(squeeze, units=out_dim / ratio, name=layer_name + '_fully_connected1')
             excitation = tf.nn.relu(excitation)
-            excitation = tf.layers.dense(excitation, units=out_dim, layer_name=layer_name + '_fully_connected2')
+            excitation = tf.layers.dense(excitation, units=out_dim, name=layer_name + '_fully_connected2')
             excitation = tf.nn.sigmoid(excitation)
             excitation = tf.reshape(excitation, [-1, 1, 1, out_dim])
             scale = inputs * excitation

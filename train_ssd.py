@@ -100,10 +100,7 @@ tf.app.flags.DEFINE_string(
 tf.app.flags.DEFINE_string(
     'lr_decay_factors', '0.1, 1, 0.1, 0.01',
     'The values of learning_rate decay factor for each segment between boundaries (comma-separated list).')
-# checkpoint related configuration
-tf.app.flags.DEFINE_string(
-    'checkpoint_path', './pretrained_model',
-    'The path to a checkpoint from which to fine-tune.')
+
 tf.app.flags.DEFINE_string(
     'checkpoint_model_scope', 'vgg_16',
     'Model scope in the checkpoint. None if the same as the trained model.')
@@ -156,11 +153,17 @@ tf.app.flags.DEFINE_integer(
 # '2019-03-21-13-32-46_w_pretrained_wo_bn'
 # '2019-03-23-15-58-36_w_bn_w_pretrianed'
 # 'pretrained_ssd'
+# '2019-03-29-13-31-17_pretrained_SEnet'
 save_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-model_dir_string = os.path.join('./logs','pretrained_ssd')
+model_dir_string = os.path.join('./logs','2019-03-29-13-31-17_pretrained_SEnet')
 tf.app.flags.DEFINE_string(
     'model_dir', model_dir_string,
     'The directory where the model will be stored.')
+
+# checkpoint related configuration
+tf.app.flags.DEFINE_string(
+    'checkpoint_path', './pretrained_model',
+    'The path to a checkpoint from which to fine-tune.')
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -216,8 +219,8 @@ def main(_):
         'nms_threshold': FLAGS.nms_threshold,
         'nms_topk': FLAGS.nms_topk,
         'keep_topk': FLAGS.keep_topk,
-        # 'eval_metric_fn_key': "coco_detection_metrics",
-        'eval_metric_fn_key': "pascal_voc_detection_metrics",
+        'eval_metric_fn_key': "coco_detection_metrics",
+        # 'eval_metric_fn_key': "pascal_voc_detection_metrics",
         'pad_nms_detections': 4000,
         # visualize
         'max_examples_to_draw': FLAGS.max_examples_to_draw,
@@ -276,10 +279,10 @@ def main(_):
     eval_spec = tf.estimator.EvalSpec(
         input_fn=input_pipeline(class_list=task_A_list,file_pattern=eval_input_pattern, is_training=False, batch_size=FLAGS.batch_size,data_format=FLAGS.data_format,num_readers=1),
         hooks=[eval_logging_hook],
-        steps=100,
+        throttle_secs=3600
     )
 
-    # tf.estimator.train_and_evaluate(ssd_detector,train_spec,eval_spec)
+    tf.estimator.train_and_evaluate(ssd_detector,train_spec,eval_spec)
 
     # ssd_detector.train(
     #     input_fn=input_pipeline(class_list=None,
@@ -302,7 +305,7 @@ def main(_):
 
 
 
-    predict = True
+    predict = False
     if predict:
         print('Starting a predict cycle.')
         predict_dir = os.path.join(FLAGS.model_dir, 'predict')
