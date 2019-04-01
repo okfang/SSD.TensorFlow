@@ -345,7 +345,7 @@ class CocoDetectionEvaluator(object_detection_evaluation.DetectionEvaluator):
 
         if self._all_metrics_per_category:
             for category_dict in self._categories:
-                category =  category_dict['name']
+                category = category_dict['name']
                 metric_names.append('DetectionBoxes_Precision mAP ByCategory/{}'.format(
                     category))
                 metric_names.append('DetectionBoxes_Precision mAP@.50IOU ByCategory/{}'.format(

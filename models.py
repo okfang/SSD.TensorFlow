@@ -41,7 +41,6 @@ def get_init_fn(model_dir,checkpoint_path,model_scope,checkpoint_model_scope,che
                                               model_scope, checkpoint_model_scope,
                                               checkpoint_exclude_scopes, ignore_missing_vars,
                                               name_remap={'/kernel': '/weights', '/bias': '/biases'},
-                                              # name_remap=None
                                               )
 
 def modified_smooth_l1(bbox_pred, bbox_targets, bbox_inside_weights=1., bbox_outside_weights=1., sigma=1.):
@@ -471,7 +470,7 @@ def ssd_model_fn(features, labels, mode, params):
         learning_rate = tf.train.piecewise_constant(tf.cast(global_step, tf.int32),
                                                     [int(_) for _ in params['decay_boundaries']],
                                                     lr_values)
-        # learning_rate = tf.constant(1e-2)
+        # learning_rate = tf.constant(params['learning_rate'])
         # execute truncated_learning_rate
         truncated_learning_rate = tf.maximum(learning_rate,
                                              tf.constant(params['end_learning_rate'], dtype=learning_rate.dtype),

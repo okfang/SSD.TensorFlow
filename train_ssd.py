@@ -95,10 +95,10 @@ tf.app.flags.DEFINE_float(
     'The minimal end learning rate used by a polynomial decay learning rate.')
 # for learning rate piecewise_constant decay
 tf.app.flags.DEFINE_string(
-    'decay_boundaries', '500, 80000, 100000',
+    'decay_boundaries', '500',
     'Learning rate decay boundaries by global_step (comma-separated list).')
 tf.app.flags.DEFINE_string(
-    'lr_decay_factors', '0.1, 1, 0.1, 0.01',
+    'lr_decay_factors', '0.1, 1',
     'The values of learning_rate decay factor for each segment between boundaries (comma-separated list).')
 
 tf.app.flags.DEFINE_string(
@@ -145,24 +145,19 @@ tf.app.flags.DEFINE_integer(
     'step2_classes',10,'Number of classes use for training second task'
 )
 
-# '2019-03-12-16-08-41'
-# '2019-03-15-12-53-26'
-# '2019-03-15-16-39-59_bn'
-# '2019-03-18-10-16-20_bn_wo_l2_loss'
-# '2019-03-19-18-42-51_bn_wo_l2_loss'
 # '2019-03-21-13-32-46_w_pretrained_wo_bn'
-# '2019-03-23-15-58-36_w_bn_w_pretrianed'
 # 'pretrained_ssd'
 # '2019-03-29-13-31-17_pretrained_SEnet'
+# '2019-03-31-19-25-57_pretrained_w_bn_SEnet'
 save_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-model_dir_string = os.path.join('./logs','2019-03-29-13-31-17_pretrained_SEnet')
+model_dir_string = os.path.join('./logs','2019-03-31-19-25-57_pretrained_w_bn_SEnet')
 tf.app.flags.DEFINE_string(
     'model_dir', model_dir_string,
     'The directory where the model will be stored.')
 
 # checkpoint related configuration
 tf.app.flags.DEFINE_string(
-    'checkpoint_path', './pretrained_model',
+    'checkpoint_path', './logs/pretrained_vgg',
     'The path to a checkpoint from which to fine-tune.')
 
 FLAGS = tf.app.flags.FLAGS
@@ -179,7 +174,7 @@ def main(_):
     # Set up a RunConfig to only save checkpoints once per training cycle.
     run_config = tf.estimator.RunConfig().replace(
         save_checkpoints_secs=FLAGS.save_checkpoints_secs).replace(
-        save_checkpoints_steps=2000).replace(
+        save_checkpoints_steps=5000).replace(
         save_summary_steps=FLAGS.save_summary_steps).replace(
         keep_checkpoint_max=5).replace(
         tf_random_seed=FLAGS.tf_random_seed).replace(
@@ -204,8 +199,8 @@ def main(_):
         'decay_boundaries': parse_comma_list(FLAGS.decay_boundaries),
         'lr_decay_factors': parse_comma_list(FLAGS.lr_decay_factors),
         # batch normalization
-        'backbone_batch_normal': False,
-        'additional_batch_normal': False,
+        'backbone_batch_normal': True,
+        'additional_batch_normal': True,
         'bn_detection_head': False,
         # init_fn
         'model_dir': FLAGS.model_dir,
@@ -235,7 +230,9 @@ def main(_):
 
     ssd_detector = tf.estimator.Estimator(
         model_fn=ssd_model_fn, model_dir=FLAGS.model_dir, config=run_config,
-        params=estimator_params
+        params=estimator_params,
+        # warm_start_from=FLAGS.checkpoint_path
+        warm_start_from=None
         )
 
     # log tensor
@@ -279,7 +276,7 @@ def main(_):
     eval_spec = tf.estimator.EvalSpec(
         input_fn=input_pipeline(class_list=task_A_list,file_pattern=eval_input_pattern, is_training=False, batch_size=FLAGS.batch_size,data_format=FLAGS.data_format,num_readers=1),
         hooks=[eval_logging_hook],
-        throttle_secs=3600
+        throttle_secs=600
     )
 
     tf.estimator.train_and_evaluate(ssd_detector,train_spec,eval_spec)
