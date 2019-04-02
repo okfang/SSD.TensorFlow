@@ -250,7 +250,9 @@ class SE_SSD300_NET(object):
             excitation = tf.layers.dense(squeeze, units=out_dim / ratio, name=layer_name + '_fully_connected1')
             excitation = tf.nn.relu(excitation)
             excitation = tf.layers.dense(excitation, units=out_dim, name=layer_name + '_fully_connected2')
-            excitation = tf.nn.sigmoid(excitation)
+            # excitation = tf.nn.sigmoid(excitation)
+            excitation = tf.nn.softmax(excitation)
+            tf.summary.histogram(name="se_activation/"+layer_name,values=excitation[0])
             excitation = tf.reshape(excitation, [-1, 1, 1, out_dim])
             scale = inputs * excitation
             return scale

@@ -51,7 +51,7 @@ tf.app.flags.DEFINE_integer(
     'log_every_n_steps',50,
     'The frequency with which logs are printed.')
 tf.app.flags.DEFINE_integer(
-    'save_summary_steps', 100,
+    'save_summary_steps', 500,
     'The frequency with which summaries are saved, in seconds.')
 tf.app.flags.DEFINE_integer(
     'save_checkpoints_secs', None,
@@ -95,10 +95,10 @@ tf.app.flags.DEFINE_float(
     'The minimal end learning rate used by a polynomial decay learning rate.')
 # for learning rate piecewise_constant decay
 tf.app.flags.DEFINE_string(
-    'decay_boundaries', '500',
+    'decay_boundaries', '100000',
     'Learning rate decay boundaries by global_step (comma-separated list).')
 tf.app.flags.DEFINE_string(
-    'lr_decay_factors', '0.1, 1',
+    'lr_decay_factors', '1, 0.1',
     'The values of learning_rate decay factor for each segment between boundaries (comma-separated list).')
 
 tf.app.flags.DEFINE_string(
@@ -150,7 +150,7 @@ tf.app.flags.DEFINE_integer(
 # '2019-03-29-13-31-17_pretrained_SEnet'
 # '2019-03-31-19-25-57_pretrained_w_bn_SEnet'
 save_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-model_dir_string = os.path.join('./logs','2019-03-31-19-25-57_pretrained_w_bn_SEnet')
+model_dir_string = os.path.join('./logs','2019-04-02-00-53-50_pretrained_w_bn_SEnet_softmax')
 tf.app.flags.DEFINE_string(
     'model_dir', model_dir_string,
     'The directory where the model will be stored.')
@@ -199,8 +199,8 @@ def main(_):
         'decay_boundaries': parse_comma_list(FLAGS.decay_boundaries),
         'lr_decay_factors': parse_comma_list(FLAGS.lr_decay_factors),
         # batch normalization
-        'backbone_batch_normal': True,
-        'additional_batch_normal': True,
+        'backbone_batch_normal': False,
+        'additional_batch_normal': False,
         'bn_detection_head': False,
         # init_fn
         'model_dir': FLAGS.model_dir,
