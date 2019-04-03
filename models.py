@@ -68,8 +68,8 @@ def modified_smooth_l1(bbox_pred, bbox_targets, bbox_inside_weights=1., bbox_out
 def predict(features,mode,params,all_num_anchors_depth):
     with tf.variable_scope(params["model_scope"], default_name=None, values=[features], reuse=tf.AUTO_REUSE):
         # get vgg16 net
-        # model = ssd_net.VGG16Backbone(params['data_format'],backbone_batch_normal=params["backbone_batch_normal"],additional_batch_normal=params['additional_batch_normal'])
-        model = se_ssd_net.SE_SSD300_NET(params['data_format'],backbone_batch_normal=params["backbone_batch_normal"],additional_batch_normal=params['additional_batch_normal'])
+        model = ssd_net.VGG16Backbone(params['data_format'],backbone_batch_normal=params["backbone_batch_normal"],additional_batch_normal=params['additional_batch_normal'])
+        # model = se_ssd_net.SE_SSD300_NET(params['data_format'],backbone_batch_normal=params["backbone_batch_normal"],additional_batch_normal=params['additional_batch_normal'])
         # return feature layers
         # feature_layers -> ['conv4','fc7','conv8','conv9','conv10','conv11']
         feature_layers = model.forward(features, training=(mode == tf.estimator.ModeKeys.TRAIN))

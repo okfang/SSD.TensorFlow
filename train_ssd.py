@@ -43,7 +43,7 @@ tf.app.flags.DEFINE_float(
     'gpu_memory_fraction', 1., 'GPU memory fraction to use.')
 # scaffold related configuration
 tf.app.flags.DEFINE_string(
-    'data_dir', '/home/dxfang/dataset/tfrecords/pascal_voc/',
+    'data_dir', '/data/kingdom/obj_detection/dataset/tfrecords/pascal_voc/',
     'The directory where the dataset input data is stored.')
 tf.app.flags.DEFINE_integer(
     'num_classes', 21, 'Number of classes to use in the dataset.')
@@ -150,7 +150,7 @@ tf.app.flags.DEFINE_integer(
 # '2019-03-29-13-31-17_pretrained_SEnet'
 # '2019-03-31-19-25-57_pretrained_w_bn_SEnet'
 save_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-model_dir_string = os.path.join('./logs','2019-04-02-00-53-50_pretrained_w_bn_SEnet_softmax')
+model_dir_string = os.path.join('./logs','2019-04-02-00-53-50_pretrained')
 tf.app.flags.DEFINE_string(
     'model_dir', model_dir_string,
     'The directory where the model will be stored.')
@@ -179,9 +179,9 @@ def main(_):
         keep_checkpoint_max=5).replace(
         tf_random_seed=FLAGS.tf_random_seed).replace(
         log_step_count_steps=FLAGS.log_every_n_steps)\
-        .replace(
-        train_distribute=distribute_strategy
-    )
+    #     .replace(
+    #     train_distribute=distribute_strategy
+    # )
     estimator_params = {
         # training
         'num_gpus': 2,
@@ -261,8 +261,11 @@ def main(_):
     eval_logging_hook = tf.train.LoggingTensorHook(tensors=eval_tensors_to_log, every_n_iter=FLAGS.log_every_n_steps,
                                                    formatter=lambda dicts: (', '.join(['%s=%.6f' % (k, v) for k, v in dicts.items()])))
 
-    train_input_pattern = '/home/dxfang/dataset/tfrecords/pascal_voc/train-000*'
-    eval_input_pattern ='/home/dxfang/dataset/tfrecords/pascal_voc/val-000*'
+    # train_input_pattern = '/data/kingdom/obj_detection/dataset/tfrecords/pascal_voc/train-000*'
+    # eval_input_pattern ='/data/kingdom/obj_detection/dataset/tfrecords/pascal_voc/val-000*'
+    train_input_pattern = '/data/kingdom/obj_detection/dataset/tfrecords/widerface_ccpd/train/*'
+    eval_input_pattern =[ "/data/kingdom/obj_detection/dataset/tfrecords/widerface_ccpd/eval/wider_face/*",
+    "/data/kingdom/obj_detection/dataset/tfrecords/widerface_ccpd/eval/ccpd/*"]
 
     print('Starting a training cycle.')
     task_A_list = list(range(1,11))
