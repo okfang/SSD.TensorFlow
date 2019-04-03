@@ -46,12 +46,12 @@ tf.app.flags.DEFINE_string(
     'data_dir', '/data/kingdom/obj_detection/dataset/tfrecords/pascal_voc/',
     'The directory where the dataset input data is stored.')
 tf.app.flags.DEFINE_integer(
-    'num_classes', 21, 'Number of classes to use in the dataset.')
+    'num_classes', 3, 'Number of classes to use in the dataset.')
 tf.app.flags.DEFINE_integer(
     'log_every_n_steps',50,
     'The frequency with which logs are printed.')
 tf.app.flags.DEFINE_integer(
-    'save_summary_steps', 500,
+    'save_summary_steps', 100,
     'The frequency with which summaries are saved, in seconds.')
 tf.app.flags.DEFINE_integer(
     'save_checkpoints_secs', None,
@@ -95,10 +95,10 @@ tf.app.flags.DEFINE_float(
     'The minimal end learning rate used by a polynomial decay learning rate.')
 # for learning rate piecewise_constant decay
 tf.app.flags.DEFINE_string(
-    'decay_boundaries', '100000',
+    'decay_boundaries', '500,100000',
     'Learning rate decay boundaries by global_step (comma-separated list).')
 tf.app.flags.DEFINE_string(
-    'lr_decay_factors', '1, 0.1',
+    'lr_decay_factors', '0.1,1, 0.1',
     'The values of learning_rate decay factor for each segment between boundaries (comma-separated list).')
 
 tf.app.flags.DEFINE_string(
@@ -133,9 +133,9 @@ tf.app.flags.DEFINE_integer(
 tf.app.flags.DEFINE_integer(
     'max_examples_to_draw', 30, 'Number of image to draw while eval.')
 tf.app.flags.DEFINE_integer(
-    'max_boxes_to_draw',20, 'Number of bbox to draw per image while eval.')
+    'max_boxes_to_draw',50, 'Number of bbox to draw per image while eval.')
 tf.app.flags.DEFINE_float(
-    'min_score_thresh',0.2, 'min score of bbox to draw')
+    'min_score_thresh',0.3, 'min score of bbox to draw')
 
 # distillation configuration
 tf.app.flags.DEFINE_integer(
@@ -179,9 +179,9 @@ def main(_):
         keep_checkpoint_max=5).replace(
         tf_random_seed=FLAGS.tf_random_seed).replace(
         log_step_count_steps=FLAGS.log_every_n_steps)\
-    #     .replace(
-    #     train_distribute=distribute_strategy
-    # )
+        .replace(
+        train_distribute=distribute_strategy
+    )
     estimator_params = {
         # training
         'num_gpus': 2,

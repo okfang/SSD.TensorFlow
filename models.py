@@ -13,6 +13,11 @@ from utils.shape_util import pad_or_clip_nd, unpad_tensor
 
 global_anchor_info = inputs.global_anchor_info
 
+WIDERFACE_CCPD_LABELSS = {
+    'face':(1,'face'),
+    'plate':(2,'plate')
+}
+
 VOC_LABELS = {
     'aeroplane': (1, 'Vehicle'),
     'bicycle': (2, 'Vehicle'),
@@ -301,7 +306,8 @@ def ssd_model_fn(features, labels, mode, params):
                                                                 nms_topk=params['nms_topk'],
                                                                 nms_threshold=params['nms_threshold'],
                                                                 is_tack_A=params['is_tack_A'],
-                                                                is_task_B=params['is_tack_B']
+                                                                is_task_B=params['is_tack_B'],
+                                                                num_classes=params['num_classes']
                                                                 )
     if mode == tf.estimator.ModeKeys.PREDICT:
         cls_pred = tf.reshape(cls_pred, [-1, params['num_classes']])
@@ -437,18 +443,20 @@ def ssd_model_fn(features, labels, mode, params):
                 'key': key
             }
 
-            category_index = {VOC_LABELS[name][0]: {"id": VOC_LABELS[name][0], "name": name} for name in
-                              VOC_LABELS.keys()}
+            # category_index = {VOC_LABELS[name][0]: {"id": VOC_LABELS[name][0], "name": name} for name in
+            #                   VOC_LABELS.keys()}
+            category_index = {WIDERFACE_CCPD_LABELSS[name][0]: {"id": WIDERFACE_CCPD_LABELSS[name][0], "name": name} for name in
+                              WIDERFACE_CCPD_LABELSS.keys()}
             categories = list(category_index.values())
             # visualization detections result
-            # eval_metric_op_vis = visualization_utils.VisualizeSingleFrameDetections(
-            #     category_index,
-            #     max_examples_to_draw=params['max_examples_to_draw'],
-            #     max_boxes_to_draw=params['max_boxes_to_draw'],
-            #     min_score_thresh=params['min_score_thresh'],
-            #     use_normalized_coordinates=False)
-            # vis_metric_ops = eval_metric_op_vis.get_estimator_eval_metric_ops(eval_input_dict)
-            # metrics.update(vis_metric_ops)
+            eval_metric_op_vis = visualization_utils.VisualizeSingleFrameDetections(
+                category_index,
+                max_examples_to_draw=params['max_examples_to_draw'],
+                max_boxes_to_draw=params['max_boxes_to_draw'],
+                min_score_thresh=params['min_score_thresh'],
+                use_normalized_coordinates=True)
+            vis_metric_ops = eval_metric_op_vis.get_estimator_eval_metric_ops(eval_input_dict)
+            metrics.update(vis_metric_ops)
 
             eval_input_dict['groundtruth_boxes'] = groundtruth_boxes
             eval_input_dict['groundtruth_classes'] = groundtruth_classes

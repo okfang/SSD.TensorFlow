@@ -29,6 +29,7 @@ def read_dataset(file_read_func, file_pattern,is_training=True, num_readers=2):
                            'still slightly shuffled since `num_readers` > 1.')
     if is_training:
         filename_dataset = filename_dataset.repeat()
+        filename_dataset = filename_dataset.shuffle(100)
     records_dataset = filename_dataset.apply(
         tf.contrib.data.parallel_interleave(
             file_read_func,
@@ -46,26 +47,28 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
         'image/filename': tf.FixedLenFeature((), tf.string, default_value=''),
         'image/height': tf.FixedLenFeature([1], tf.int64),
         'image/width': tf.FixedLenFeature([1], tf.int64),
-        'image/channels': tf.FixedLenFeature([1], tf.int64),
-        'image/shape': tf.FixedLenFeature([3], tf.int64),
+        # 'image/channels': tf.FixedLenFeature([1], tf.int64),
+        # 'image/shape': tf.FixedLenFeature([3], tf.int64),
         'image/object/bbox/xmin': tf.VarLenFeature(dtype=tf.float32),
         'image/object/bbox/ymin': tf.VarLenFeature(dtype=tf.float32),
         'image/object/bbox/xmax': tf.VarLenFeature(dtype=tf.float32),
         'image/object/bbox/ymax': tf.VarLenFeature(dtype=tf.float32),
-        'image/object/bbox/label': tf.VarLenFeature(dtype=tf.int64),
-        'image/object/bbox/difficult': tf.VarLenFeature(dtype=tf.int64),
-        'image/object/bbox/truncated': tf.VarLenFeature(dtype=tf.int64),
+        'image/object/class/label': tf.VarLenFeature(dtype=tf.int64),
+        # 'image/object/bbox/difficult': tf.VarLenFeature(dtype=tf.int64),
+        # 'image/object/bbox/truncated': tf.VarLenFeature(dtype=tf.int64),
     }
     items_to_handlers = {
         'image': slim.tfexample_decoder.Image('image/encoded', 'image/format'),
         'key': slim.tfexample_decoder.Tensor('image/key/sha256'),
         'filename': slim.tfexample_decoder.Tensor('image/filename'),
-        'shape': slim.tfexample_decoder.Tensor('image/shape'),
+        'height': slim.tfexample_decoder.Tensor('image/height'),
+        'width': slim.tfexample_decoder.Tensor('image/width'),
+        # 'shape': slim.tfexample_decoder.Tensor('image/shape'),
         'object/bbox': slim.tfexample_decoder.BoundingBox(
             ['ymin', 'xmin', 'ymax', 'xmax'], 'image/object/bbox/'),
-        'object/label': slim.tfexample_decoder.Tensor('image/object/bbox/label'),
-        'object/difficult': slim.tfexample_decoder.Tensor('image/object/bbox/difficult'),
-        'object/truncated': slim.tfexample_decoder.Tensor('image/object/bbox/truncated'),
+        'object/label': slim.tfexample_decoder.Tensor('image/object/class/label'),
+        # 'object/difficult': slim.tfexample_decoder.Tensor('image/object/bbox/difficult'),
+        # 'object/truncated': slim.tfexample_decoder.Tensor('image/object/bbox/truncated'),
     }
     decoder = slim.tfexample_decoder.TFExampleDecoder(keys_to_features, items_to_handlers)
 
@@ -75,11 +78,12 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
         tensors = decoder.decode(serialized_example, items=keys)
         tensor_dict = dict(zip(keys, tensors))
         original_image = tensor_dict['image']
-        original_shape = tensor_dict['shape']
+        # original_shape = tensor_dict['shape']
+        original_shape = tf.concat([tensor_dict['height'],tensor_dict['width']],axis=0)
         filename = tensor_dict['filename']
         glabels_raw = tensor_dict['object/label']
         gbboxes_raw = tensor_dict['object/bbox']
-        isdifficult = tensor_dict['object/difficult']
+        # isdifficult = tensor_dict['object/difficult']
         key = tensor_dict['key']
 
         # # filter class
@@ -87,23 +91,23 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
             valid_class_mask = glabels_raw <= 10
             glabels_raw = tf.boolean_mask(glabels_raw, valid_class_mask)
             gbboxes_raw = tf.boolean_mask(gbboxes_raw, valid_class_mask)
-            isdifficult = tf.boolean_mask(isdifficult, valid_class_mask)
+            # isdifficult = tf.boolean_mask(isdifficult, valid_class_mask)
 
-        return (original_image,original_shape,filename,glabels_raw,gbboxes_raw,isdifficult,key)
+        return (original_image,original_shape,filename,glabels_raw,gbboxes_raw,key)
 
-    def filter_fn(original_image, original_shape, filename, glabels_raw, gbboxes_raw, isdifficult, key):
+    def filter_fn(original_image, original_shape, filename, glabels_raw, gbboxes_raw, key):
         return tf.not_equal(tf.count_nonzero(glabels_raw <= 10),0)
 
-    def process_fn(original_image,original_shape,filename,glabels_raw,gbboxes_raw,isdifficult,key):
-        # filter difficult example
-        if is_training:
-            # if all is difficult, then keep the first one
-            isdifficult_mask = tf.cond(tf.count_nonzero(isdifficult, dtype=tf.int32) < tf.shape(isdifficult)[0],
-                                       lambda: isdifficult < tf.ones_like(isdifficult),
-                                       lambda: tf.one_hot(0, tf.shape(isdifficult)[0], on_value=True, off_value=False,
-                                                          dtype=tf.bool))
-            glabels_raw = tf.boolean_mask(glabels_raw, isdifficult_mask)
-            gbboxes_raw = tf.boolean_mask(gbboxes_raw, isdifficult_mask)
+    def process_fn(original_image,original_shape,filename,glabels_raw,gbboxes_raw,key):
+        # # filter difficult example
+        # if is_training:
+        #     # if all is difficult, then keep the first one
+        #     isdifficult_mask = tf.cond(tf.count_nonzero(isdifficult, dtype=tf.int32) < tf.shape(isdifficult)[0],
+        #                                lambda: isdifficult < tf.ones_like(isdifficult),
+        #                                lambda: tf.one_hot(0, tf.shape(isdifficult)[0], on_value=True, off_value=False,
+        #                                                   dtype=tf.bool))
+        #     glabels_raw = tf.boolean_mask(glabels_raw, isdifficult_mask)
+        #     gbboxes_raw = tf.boolean_mask(gbboxes_raw, isdifficult_mask)
 
         # Pre-processing image, labels and bboxes.
         if is_training:
@@ -113,7 +117,7 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
             groundtruth_classes, groundtruth_boxes = glabels_raw, gbboxes_raw
 
         num_groundtruth_boxes = tf.shape(groundtruth_boxes)[0]
-        max_num_bboxes = 50
+        max_num_bboxes = 200
 
         # padding in num_bboxes dimension
         groundtruth_classes = pad_or_clip_nd(groundtruth_classes,output_shape = [max_num_bboxes])
@@ -151,7 +155,7 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
                            file_pattern,
                            is_training=is_training,
                            num_readers=num_readers)
-
+    dataset = dataset.shuffle(buffer_size=1000)
     # 预处理
     dataset = dataset.map(decode_example,num_parallel_calls=batch_size)
     if class_list:
