@@ -89,16 +89,16 @@ tf.app.flags.DEFINE_float(
 tf.app.flags.DEFINE_float(
     'momentum', 0.9,
     'The momentum for the MomentumOptimizer and RMSPropOptimizer.')
-tf.app.flags.DEFINE_float('learning_rate', 1e-3, 'Initial learning rate.')
+tf.app.flags.DEFINE_float('learning_rate', 1e-5, 'Initial learning rate.')
 tf.app.flags.DEFINE_float(
     'end_learning_rate', 0.000001,
     'The minimal end learning rate used by a polynomial decay learning rate.')
 # for learning rate piecewise_constant decay
 tf.app.flags.DEFINE_string(
-    'decay_boundaries', '100000',
+    'decay_boundaries', '500',
     'Learning rate decay boundaries by global_step (comma-separated list).')
 tf.app.flags.DEFINE_string(
-    'lr_decay_factors', '1, 0.1',
+    'lr_decay_factors', '0.1,1',
     'The values of learning_rate decay factor for each segment between boundaries (comma-separated list).')
 
 tf.app.flags.DEFINE_string(
@@ -150,7 +150,7 @@ tf.app.flags.DEFINE_integer(
 # '2019-03-29-13-31-17_pretrained_SEnet'
 # '2019-03-31-19-25-57_pretrained_w_bn_SEnet'
 save_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-model_dir_string = os.path.join('./logs','2019-04-02-00-53-50_pretrained_w_bn_SEnet_softmax')
+model_dir_string = os.path.join('./logs','2019-04-02-00-53-50_pretrained_w_bn_SEnet_sigmoid_tem_1e-1')
 tf.app.flags.DEFINE_string(
     'model_dir', model_dir_string,
     'The directory where the model will be stored.')
@@ -180,8 +180,8 @@ def main(_):
         tf_random_seed=FLAGS.tf_random_seed).replace(
         log_step_count_steps=FLAGS.log_every_n_steps)\
         .replace(
-        train_distribute=distribute_strategy
-    )
+            train_distribute=distribute_strategy
+        )
     estimator_params = {
         # training
         'num_gpus': 2,

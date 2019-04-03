@@ -478,9 +478,9 @@ def ssd_model_fn(features, labels, mode, params):
         # Create a tensor named learning_rate for logging purposes.
         tf.summary.scalar('learning_rate', truncated_learning_rate)
 
-        # optimizer = tf.train.MomentumOptimizer(learning_rate=truncated_learning_rate,
-        #                                        momentum=params['momentum'])
-        optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+        optimizer = tf.train.MomentumOptimizer(learning_rate=truncated_learning_rate,
+                                               momentum=params['momentum'])
+        # optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
 
         # Batch norm requires update_ops to be added as a train_op dependency.
         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
