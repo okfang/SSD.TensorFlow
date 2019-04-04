@@ -89,16 +89,16 @@ tf.app.flags.DEFINE_float(
 tf.app.flags.DEFINE_float(
     'momentum', 0.9,
     'The momentum for the MomentumOptimizer and RMSPropOptimizer.')
-tf.app.flags.DEFINE_float('learning_rate', 1e-3, 'Initial learning rate.')
+tf.app.flags.DEFINE_float('learning_rate', 1e-4, 'Initial learning rate.')
 tf.app.flags.DEFINE_float(
     'end_learning_rate', 0.000001,
     'The minimal end learning rate used by a polynomial decay learning rate.')
 # for learning rate piecewise_constant decay
 tf.app.flags.DEFINE_string(
-    'decay_boundaries', '500,100000',
+    'decay_boundaries', '100000',
     'Learning rate decay boundaries by global_step (comma-separated list).')
 tf.app.flags.DEFINE_string(
-    'lr_decay_factors', '0.1,1, 0.1',
+    'lr_decay_factors', '1, 0.1',
     'The values of learning_rate decay factor for each segment between boundaries (comma-separated list).')
 
 tf.app.flags.DEFINE_string(
@@ -131,11 +131,11 @@ tf.app.flags.DEFINE_integer(
 
 # visualization realted configuration
 tf.app.flags.DEFINE_integer(
-    'max_examples_to_draw', 30, 'Number of image to draw while eval.')
+    'max_examples_to_draw', 50, 'Number of image to draw while eval.')
 tf.app.flags.DEFINE_integer(
     'max_boxes_to_draw',50, 'Number of bbox to draw per image while eval.')
 tf.app.flags.DEFINE_float(
-    'min_score_thresh',0.3, 'min score of bbox to draw')
+    'min_score_thresh',0.2, 'min score of bbox to draw')
 
 # distillation configuration
 tf.app.flags.DEFINE_integer(
@@ -149,8 +149,9 @@ tf.app.flags.DEFINE_integer(
 # 'pretrained_ssd'
 # '2019-03-29-13-31-17_pretrained_SEnet'
 # '2019-03-31-19-25-57_pretrained_w_bn_SEnet'
+# '2019-04-03-23-32-18_widerface_ccpd_pretrained'
 save_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-model_dir_string = os.path.join('./logs','2019-04-02-00-53-50_pretrained')
+model_dir_string = os.path.join('./logs','2019-04-03-23-32-18_widerface_ccpd_pretrained')
 tf.app.flags.DEFINE_string(
     'model_dir', model_dir_string,
     'The directory where the model will be stored.')
@@ -263,9 +264,13 @@ def main(_):
 
     # train_input_pattern = '/data/kingdom/obj_detection/dataset/tfrecords/pascal_voc/train-000*'
     # eval_input_pattern ='/data/kingdom/obj_detection/dataset/tfrecords/pascal_voc/val-000*'
-    train_input_pattern = '/data/kingdom/obj_detection/dataset/tfrecords/widerface_ccpd/train/*'
-    eval_input_pattern =[ "/data/kingdom/obj_detection/dataset/tfrecords/widerface_ccpd/eval/wider_face/*",
-    "/data/kingdom/obj_detection/dataset/tfrecords/widerface_ccpd/eval/ccpd/*"]
+    # train_input_pattern = '/data/kingdom/obj_detection/dataset/tfrecords/widerface_ccpd/train/*'
+    # eval_input_pattern =[ "/data/kingdom/obj_detection/dataset/tfrecords/widerface_ccpd/eval/wider_face/*",
+    # "/data/kingdom/obj_detection/dataset/tfrecords/widerface_ccpd/eval/ccpd/*"]
+    train_input_pattern = '/home/dxfang/dataset/tfrecords/widerface_ccpd/train/*'
+    eval_input_pattern =[ "/home/dxfang/dataset/tfrecords/widerface_ccpd/eval/wider_face/*",
+    "/home/dxfang/dataset/tfrecords/widerface_ccpd/eval/ccpd/*"]
+    # eval_input_pattern =[ "/home/dxfang/dataset/tfrecords/widerface_ccpd/eval/wider_face/*"]
 
     print('Starting a training cycle.')
     task_A_list = list(range(1,11))
@@ -300,6 +305,7 @@ def main(_):
     #                                               batch_size=FLAGS.batch_size,
     #                                               data_format=FLAGS.data_format,
     #                                               num_readers=1),
+    #                       steps=50,
     #                       hooks=[eval_logging_hook],
     #                       )
 

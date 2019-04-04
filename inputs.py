@@ -29,7 +29,7 @@ def read_dataset(file_read_func, file_pattern,is_training=True, num_readers=2):
                            'still slightly shuffled since `num_readers` > 1.')
     if is_training:
         filename_dataset = filename_dataset.repeat()
-        filename_dataset = filename_dataset.shuffle(100)
+        filename_dataset = filename_dataset.shuffle(520)
     records_dataset = filename_dataset.apply(
         tf.contrib.data.parallel_interleave(
             file_read_func,
@@ -155,7 +155,7 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
                            file_pattern,
                            is_training=is_training,
                            num_readers=num_readers)
-    dataset = dataset.shuffle(buffer_size=1000)
+    dataset = dataset.shuffle(buffer_size=10000)
     # 预处理
     dataset = dataset.map(decode_example,num_parallel_calls=batch_size)
     if class_list:
