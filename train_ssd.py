@@ -46,7 +46,7 @@ tf.app.flags.DEFINE_string(
     'data_dir', '/data/kingdom/obj_detection/dataset/tfrecords/pascal_voc/',
     'The directory where the dataset input data is stored.')
 tf.app.flags.DEFINE_integer(
-    'num_classes', 3, 'Number of classes to use in the dataset.')
+    'num_classes', 2, 'Number of classes to use in the dataset.')
 tf.app.flags.DEFINE_integer(
     'log_every_n_steps',50,
     'The frequency with which logs are printed.')
@@ -151,7 +151,7 @@ tf.app.flags.DEFINE_integer(
 # '2019-03-31-19-25-57_pretrained_w_bn_SEnet'
 # '2019-04-03-23-32-18_widerface_ccpd_pretrained'
 save_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-model_dir_string = os.path.join('./logs','2019-04-03-23-32-18_widerface_ccpd_pretrained')
+model_dir_string = os.path.join('./logs','2019-04-04-23-57-56_ccpd_pretrained')
 tf.app.flags.DEFINE_string(
     'model_dir', model_dir_string,
     'The directory where the model will be stored.')
@@ -175,7 +175,7 @@ def main(_):
     # Set up a RunConfig to only save checkpoints once per training cycle.
     run_config = tf.estimator.RunConfig().replace(
         save_checkpoints_secs=FLAGS.save_checkpoints_secs).replace(
-        save_checkpoints_steps=5000).replace(
+        save_checkpoints_steps=2000).replace(
         save_summary_steps=FLAGS.save_summary_steps).replace(
         keep_checkpoint_max=5).replace(
         tf_random_seed=FLAGS.tf_random_seed).replace(
@@ -245,7 +245,9 @@ def main(_):
         'l2': 'l2_loss',
         'acc': 'cls_accuracy',
         'num_positives': 'hard_example_mining/num_positives',
-        'num_negatives_selected': 'hard_example_mining/num_negatives_select'
+        'num_negatives_selected': 'hard_example_mining/num_negatives_select',
+        # 'final_mask':'final_mask',
+        # 'positive_mask':'positive_mask',
     }
     train_logging_hook = tf.train.LoggingTensorHook(tensors=train_tensors_to_log, every_n_iter=FLAGS.log_every_n_steps,
                                               formatter = lambda dicts: (', '.join(['%s=%.6f' % (k, v) for k, v in dicts.items()])))
@@ -267,10 +269,10 @@ def main(_):
     # train_input_pattern = '/data/kingdom/obj_detection/dataset/tfrecords/widerface_ccpd/train/*'
     # eval_input_pattern =[ "/data/kingdom/obj_detection/dataset/tfrecords/widerface_ccpd/eval/wider_face/*",
     # "/data/kingdom/obj_detection/dataset/tfrecords/widerface_ccpd/eval/ccpd/*"]
-    train_input_pattern = '/home/dxfang/dataset/tfrecords/widerface_ccpd/train/*'
-    eval_input_pattern =[ "/home/dxfang/dataset/tfrecords/widerface_ccpd/eval/wider_face/*",
-    "/home/dxfang/dataset/tfrecords/widerface_ccpd/eval/ccpd/*"]
-    # eval_input_pattern =[ "/home/dxfang/dataset/tfrecords/widerface_ccpd/eval/wider_face/*"]
+    train_input_pattern = '/home/dxfang/dataset/tfrecords/widerface_ccpd/train/ccpd*'
+    # eval_input_pattern =[ "/home/dxfang/dataset/tfrecords/widerface_ccpd/eval/wider_face/*",
+    # "/home/dxfang/dataset/tfrecords/widerface_ccpd/eval/ccpd/*"]
+    eval_input_pattern =[ "/home/dxfang/dataset/tfrecords/widerface_ccpd/eval/ccpd/*"]
 
     print('Starting a training cycle.')
     task_A_list = list(range(1,11))

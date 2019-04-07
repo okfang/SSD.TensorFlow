@@ -1,4 +1,5 @@
 import functools
+import sys
 
 import tensorflow as tf
 
@@ -14,8 +15,8 @@ from utils.shape_util import pad_or_clip_nd, unpad_tensor
 global_anchor_info = inputs.global_anchor_info
 
 WIDERFACE_CCPD_LABELSS = {
-    'face':(1,'face'),
-    'plate':(2,'plate')
+    # 'face':(1,'face'),
+    'plate':(1,'plate')
 }
 
 VOC_LABELS = {
@@ -355,6 +356,8 @@ def ssd_model_fn(features, labels, mode, params):
 
     # hard example mining
     final_mask, positive_mask = hard_example_mining(cls_targets, cls_pred, params)
+    tf.identity(tf.count_nonzero(final_mask),name='final_mask')
+    tf.identity(tf.count_nonzero(positive_mask),name='positive_mask')
     # flatten targets
     flatten_cls_targets = tf.reshape(cls_targets, [-1])
     flatten_loc_targets = tf.reshape(loc_targets, [-1, 4])
@@ -363,6 +366,9 @@ def ssd_model_fn(features, labels, mode, params):
     flatten_location_pred = tf.reshape(location_pred, [-1, 4])
     # apply hard_example_mining
     flatten_cls_pred_hard_exam_mining = tf.boolean_mask(flatten_cls_pred, final_mask)
+    # print_final_op = tf.print(flatten_cls_pred_hard_exam_mining,output_stream=sys.stdout)
+    # print_positive_op = tf.print(tf.boolean_mask(flatten_cls_pred,positive_mask),output_stream=sys.stdout)
+    # with tf.control_dependencies([print_positive_op,print_final_op]):
     flatten_location_pred_hard_exam_mining = tf.boolean_mask(flatten_location_pred,
                                                              tf.stop_gradient(positive_mask))
     flatten_cls_targets_hard_exam_mining = tf.boolean_mask(

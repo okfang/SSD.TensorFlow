@@ -81,7 +81,8 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
         # original_shape = tensor_dict['shape']
         original_shape = tf.concat([tensor_dict['height'],tensor_dict['width']],axis=0)
         filename = tensor_dict['filename']
-        glabels_raw = tensor_dict['object/label']
+        glabels_raw = tensor_dict['object/label']-1
+        # glabels_raw = tf.constant(1,dtype=tf.int64)
         gbboxes_raw = tensor_dict['object/bbox']
         # isdifficult = tensor_dict['object/difficult']
         key = tensor_dict['key']
@@ -174,11 +175,14 @@ def input_pipeline(class_list=None,file_pattern='train-*', is_training=True, bat
                                                           layers_shapes=[(38, 38), (19, 19), (10, 10), (5, 5),
                                                                          (3, 3),
                                                                          (1, 1)],
-                                                          anchor_scales=[(0.1,), (0.2,), (0.375,), (0.55,),
-                                                                         (0.725,),
-                                                                         (0.9,)],
-                                                          extra_anchor_scales=[(0.1414,), (0.2739,), (0.4541,),
-                                                                               (0.6315,), (0.8078,), (0.9836,)],
+                                                          # anchor_scales=[(0.1,), (0.2,), (0.375,), (0.55,),
+                                                          #                (0.725,),
+                                                          #                (0.9,)],
+                                                          anchor_scales=[(0.1,), (0.2,), (0.375,), (0.375,),
+                                                                         (0.375,),
+                                                                         (0.375,)],
+                                                          extra_anchor_scales=[(0.075,), (0.1414,), (0.25,),
+                                                                               (0.35,), (0.45,), (0.55,)],
                                                           anchor_ratios=[(1., 2., .5), (1., 2., 3., .5, 0.3333),
                                                                          (1., 2., 3., .5, 0.3333),
                                                                          (1., 2., 3., .5, 0.3333), (1., 2., .5),
