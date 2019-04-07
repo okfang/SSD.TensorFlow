@@ -64,7 +64,7 @@ tf.app.flags.DEFINE_integer(
     'train_epochs', None,
     'The number of epochs to use for training.')
 tf.app.flags.DEFINE_integer(
-    'max_number_of_steps', 200000,
+    'max_number_of_steps', 120000,
     'The max number of steps to use for training.')
 tf.app.flags.DEFINE_integer(
     'batch_size',16,
@@ -89,16 +89,16 @@ tf.app.flags.DEFINE_float(
 tf.app.flags.DEFINE_float(
     'momentum', 0.9,
     'The momentum for the MomentumOptimizer and RMSPropOptimizer.')
-tf.app.flags.DEFINE_float('learning_rate', 1e-5, 'Initial learning rate.')
+tf.app.flags.DEFINE_float('learning_rate', 1e-3, 'Initial learning rate.')
 tf.app.flags.DEFINE_float(
     'end_learning_rate', 0.000001,
     'The minimal end learning rate used by a polynomial decay learning rate.')
 # for learning rate piecewise_constant decay
 tf.app.flags.DEFINE_string(
-    'decay_boundaries', '500',
+    'decay_boundaries', '500,80000',
     'Learning rate decay boundaries by global_step (comma-separated list).')
 tf.app.flags.DEFINE_string(
-    'lr_decay_factors', '0.1,1',
+    'lr_decay_factors', '0.1,1,0.1',
     'The values of learning_rate decay factor for each segment between boundaries (comma-separated list).')
 
 tf.app.flags.DEFINE_string(
@@ -149,8 +149,10 @@ tf.app.flags.DEFINE_integer(
 # 'pretrained_ssd'
 # '2019-03-29-13-31-17_pretrained_SEnet'
 # '2019-03-31-19-25-57_pretrained_w_bn_SEnet'
+# '2019-04-02-00-53-50_pretrained_w_bn_SEnet_sigmoid_tem_1e-1'
+# '2019-04-07-23-34-01_disstion_taskA_SEnet_1e-1'
 save_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-model_dir_string = os.path.join('./logs','2019-04-02-00-53-50_pretrained_w_bn_SEnet_sigmoid_tem_1e-1')
+model_dir_string = os.path.join('./logs','2019-04-07-23-34-01_disstion_taskA_SEnet_1e-1')
 tf.app.flags.DEFINE_string(
     'model_dir', model_dir_string,
     'The directory where the model will be stored.')
@@ -267,7 +269,7 @@ def main(_):
     print('Starting a training cycle.')
     task_A_list = list(range(1,11))
     task_B_list = list(range(11,21))
-    task_A_list = None
+    # task_A_list = None
     train_spec = tf.estimator.TrainSpec(
         input_fn=input_pipeline(class_list=task_A_list,file_pattern=train_input_pattern, is_training=True, batch_size=FLAGS.batch_size,data_format=FLAGS.data_format),
         max_steps=FLAGS.max_number_of_steps,
@@ -292,7 +294,8 @@ def main(_):
     # )
 
 
-    # ssd_detector.evaluate(input_fn=input_pipeline(file_pattern=eval_input_pattern,
+    # ssd_detector.evaluate(input_fn=input_pipeline(class_list=task_B_list,
+    #                                               file_pattern=eval_input_pattern,
     #                                               is_training=False,
     #                                               batch_size=FLAGS.batch_size,
     #                                               data_format=FLAGS.data_format,

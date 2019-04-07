@@ -152,7 +152,7 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
                            is_training=is_training,
                            num_readers=num_readers)
 
-    # 预处理
+    # 预处理,获取数据
     dataset = dataset.map(decode_example,num_parallel_calls=batch_size)
     if class_list:
         dataset = dataset.filter(filter_fn)
@@ -194,7 +194,8 @@ def input_pipeline(class_list=None,file_pattern='train-*', is_training=True, bat
                                                                                                      is_training=is_training,
                                                                                                      data_format=data_format,
                                                                                                      output_rgb=False)
-        dataset = build_dataset(class_list = class_list,file_pattern=file_pattern,
+        dataset = build_dataset(class_list=class_list,
+                                file_pattern=file_pattern,
                                 is_training=is_training,
                                 batch_size=batch_size,
                                 image_preprocessing_fn=image_preprocessing_fn,

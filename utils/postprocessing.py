@@ -78,7 +78,7 @@ def parse_by_class(cls_pred, bboxes_pred, num_classes, select_threshold, min_siz
 
         return selected_bboxes, selected_scores
 
-def per_image_post_process(cls_pred, bboxes_pred,mode,select_threshold=None, min_size=None, keep_topk=None, nms_topk=None, nms_threshold=None,is_tack_A=False,is_task_B=False):
+def per_image_post_process(cls_pred, bboxes_pred,mode,select_threshold=None, min_size=None, keep_topk=None, nms_topk=None, nms_threshold=None,is_tack_A=False,is_task_B=False,num_classes=None):
     """
     select boxes per image
     :param cls_pred:  [num_all_anchors,21]
@@ -96,12 +96,12 @@ def per_image_post_process(cls_pred, bboxes_pred,mode,select_threshold=None, min
         per_image_total_detections: [num_selected_boxes]
     """
     with tf.name_scope('select_bboxes', [cls_pred, bboxes_pred]):
-        class_list = list(range(1,21))
+        class_list = list(range(1,num_classes))
         if is_tack_A:
-            cls_pred = cls_pred[:,:11]
+            # cls_pred = cls_pred[:,:11]
             class_list = list(range(0,11))
         if is_task_B:
-            cls_pred = tf.gather(cls_pred, [0] + list(range(11, 21)), axis=1)
+            # cls_pred = tf.gather(cls_pred, [0] + list(range(11, 21)), axis=1)
             class_list = list(range(11, 21))
 
         # calculate probability

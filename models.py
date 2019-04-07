@@ -147,10 +147,10 @@ def hard_example_mining(cls_targets, cls_pred, params):
 
 def build_losses(cls_targets=None,cls_pred=None, loc_targets=None,loc_pred=None, params=None,is_task_A=False,is_task_B=False):
 
-    if is_task_A:
-        cls_pred = cls_pred[:, :11]
-    if is_task_B:
-        cls_pred = tf.gather(cls_pred, [0]+list(range(11, 21)), axis=1)
+    # if is_task_A:
+    #     cls_pred = cls_pred[:, :11]
+    # if is_task_B:
+    #     cls_pred = tf.gather(cls_pred, [0]+list(range(11, 21)), axis=1)
 
     cross_entropy = tf.losses.sparse_softmax_cross_entropy(labels=cls_targets,logits=cls_pred) * (params['negative_ratio'] + 1.)
     tf.identity(cross_entropy, name='cross_entropy_loss')
@@ -301,7 +301,8 @@ def ssd_model_fn(features, labels, mode, params):
                                                                 nms_topk=params['nms_topk'],
                                                                 nms_threshold=params['nms_threshold'],
                                                                 is_tack_A=params['is_tack_A'],
-                                                                is_task_B=params['is_tack_B']
+                                                                is_task_B=params['is_tack_B'],
+                                                                num_classes = params['num_classes']
                                                                 )
     if mode == tf.estimator.ModeKeys.PREDICT:
         cls_pred = tf.reshape(cls_pred, [-1, params['num_classes']])
