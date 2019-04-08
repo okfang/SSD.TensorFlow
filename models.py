@@ -497,6 +497,6 @@ def ssd_model_fn(features, labels, mode, params):
         loss=total_loss,
         train_op=train_op,
         eval_metric_ops=metrics,
-        scaffold=tf.train.Scaffold(init_fn=get_init_fn(params['model_dir'],params['checkpoint_path'],params['model_scope'],params['checkpoint_model_scope'],params['checkpoint_exclude_scopes'],params['ignore_missing_vars'])),
+        # scaffold=tf.train.Scaffold(init_fn=get_init_fn(params['model_dir'],params['checkpoint_path'],params['model_scope'],params['checkpoint_model_scope'],params['checkpoint_exclude_scopes'],params['ignore_missing_vars'])),
         # scaffold=tf.train.Scaffold(init_op=init_op)
     )

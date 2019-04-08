@@ -84,7 +84,7 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
 
         # # filter class
         if class_list:
-            valid_class_mask = glabels_raw <= 10
+            valid_class_mask = glabels_raw > 10
             glabels_raw = tf.boolean_mask(glabels_raw, valid_class_mask)
             gbboxes_raw = tf.boolean_mask(gbboxes_raw, valid_class_mask)
             isdifficult = tf.boolean_mask(isdifficult, valid_class_mask)
@@ -92,7 +92,7 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
         return (original_image,original_shape,filename,glabels_raw,gbboxes_raw,isdifficult,key)
 
     def filter_fn(original_image, original_shape, filename, glabels_raw, gbboxes_raw, isdifficult, key):
-        return tf.not_equal(tf.count_nonzero(glabels_raw <= 10),0)
+        return tf.not_equal(tf.count_nonzero(glabels_raw > 10),0)
 
     def process_fn(original_image,original_shape,filename,glabels_raw,gbboxes_raw,isdifficult,key):
         # filter difficult example

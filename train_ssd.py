@@ -95,7 +95,7 @@ tf.app.flags.DEFINE_float(
     'The minimal end learning rate used by a polynomial decay learning rate.')
 # for learning rate piecewise_constant decay
 tf.app.flags.DEFINE_string(
-    'decay_boundaries', '500,80000',
+    'decay_boundaries', '500,50000',
     'Learning rate decay boundaries by global_step (comma-separated list).')
 tf.app.flags.DEFINE_string(
     'lr_decay_factors', '0.1,1,0.1',
@@ -151,15 +151,16 @@ tf.app.flags.DEFINE_integer(
 # '2019-03-31-19-25-57_pretrained_w_bn_SEnet'
 # '2019-04-02-00-53-50_pretrained_w_bn_SEnet_sigmoid_tem_1e-1'
 # '2019-04-07-23-34-01_disstion_taskA_SEnet_1e-1'
+# '2019-04-08-13-16-19_disstion_taskB_SEnet_1e-1'
 save_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-model_dir_string = os.path.join('./logs','2019-04-07-23-34-01_disstion_taskA_SEnet_1e-1')
+model_dir_string = os.path.join('./logs','2019-04-08-20-06-26_incremental_evaluate_all_class')
 tf.app.flags.DEFINE_string(
     'model_dir', model_dir_string,
     'The directory where the model will be stored.')
 
 # checkpoint related configuration
 tf.app.flags.DEFINE_string(
-    'checkpoint_path', './logs/pretrained_vgg',
+    'checkpoint_path', './logs/2019-04-07-23-34-01_disstion_taskA_SEnet_1e-1',
     'The path to a checkpoint from which to fine-tune.')
 
 FLAGS = tf.app.flags.FLAGS
@@ -176,7 +177,7 @@ def main(_):
     # Set up a RunConfig to only save checkpoints once per training cycle.
     run_config = tf.estimator.RunConfig().replace(
         save_checkpoints_secs=FLAGS.save_checkpoints_secs).replace(
-        save_checkpoints_steps=5000).replace(
+        save_checkpoints_steps=1000).replace(
         save_summary_steps=FLAGS.save_summary_steps).replace(
         keep_checkpoint_max=5).replace(
         tf_random_seed=FLAGS.tf_random_seed).replace(
@@ -271,14 +272,15 @@ def main(_):
     task_B_list = list(range(11,21))
     # task_A_list = None
     train_spec = tf.estimator.TrainSpec(
-        input_fn=input_pipeline(class_list=task_A_list,file_pattern=train_input_pattern, is_training=True, batch_size=FLAGS.batch_size,data_format=FLAGS.data_format),
+        input_fn=input_pipeline(class_list=task_B_list,file_pattern=train_input_pattern, is_training=True, batch_size=FLAGS.batch_size,data_format=FLAGS.data_format),
         max_steps=FLAGS.max_number_of_steps,
         hooks= [train_logging_hook],
     )
     eval_spec = tf.estimator.EvalSpec(
-        input_fn=input_pipeline(class_list=task_A_list,file_pattern=eval_input_pattern, is_training=False, batch_size=FLAGS.batch_size,data_format=FLAGS.data_format,num_readers=1),
+        input_fn=input_pipeline(class_list=None,file_pattern=eval_input_pattern, is_training=False, batch_size=FLAGS.batch_size,data_format=FLAGS.data_format,num_readers=1),
         hooks=[eval_logging_hook],
-        throttle_secs=600
+        start_delay_secs=0,
+        throttle_secs=0
     )
 
     tf.estimator.train_and_evaluate(ssd_detector,train_spec,eval_spec)
@@ -294,7 +296,7 @@ def main(_):
     # )
 
 
-    # ssd_detector.evaluate(input_fn=input_pipeline(class_list=task_B_list,
+    # ssd_detector.evaluate(input_fn=input_pipeline(class_list=None,
     #                                               file_pattern=eval_input_pattern,
     #                                               is_training=False,
     #                                               batch_size=FLAGS.batch_size,
