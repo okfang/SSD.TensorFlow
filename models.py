@@ -36,6 +36,9 @@ VOC_LABELS = {
     'tvmonitor': (20, 'Indoor'),
 }
 
+def get_dist_init_fn(model_dir,checkpoint_path,model_scope,dist_scope='distillation_sub_net'):
+    return scaffolds.dist_init_fn(model_dir, checkpoint_path,model_scope,dist_scope)
+
 def get_init_fn(model_dir,checkpoint_path,model_scope,checkpoint_model_scope,checkpoint_exclude_scopes,ignore_missing_vars):
     return scaffolds.get_init_fn_for_scaffold(model_dir, checkpoint_path,
                                               model_scope, checkpoint_model_scope,
@@ -65,11 +68,11 @@ def modified_smooth_l1(bbox_pred, bbox_targets, bbox_inside_weights=1., bbox_out
         return outside_mul
 
 
-def predict(features,mode,params,all_num_anchors_depth):
-    with tf.variable_scope(params["model_scope"], default_name=None, values=[features], reuse=tf.AUTO_REUSE):
+def predict(features,mode,params,all_num_anchors_depth,scope_name):
+    with tf.variable_scope(scope_name, default_name=None, values=[features]):
         # get vgg16 net
-        # model = ssd_net.VGG16Backbone(params['data_format'],backbone_batch_normal=params["backbone_batch_normal"],additional_batch_normal=params['additional_batch_normal'])
-        model = se_ssd_net.SE_SSD300_NET(params['data_format'],backbone_batch_normal=params["backbone_batch_normal"],additional_batch_normal=params['additional_batch_normal'])
+        model = ssd_net.VGG16Backbone(params['data_format'],backbone_batch_normal=params["backbone_batch_normal"],additional_batch_normal=params['additional_batch_normal'])
+        # model = se_ssd_net.SE_SSD300_NET(params['data_format'],backbone_batch_normal=params["backbone_batch_normal"],additional_batch_normal=params['additional_batch_normal'])
         # return feature layers
         # feature_layers -> ['conv4','fc7','conv8','conv9','conv10','conv11']
         feature_layers = model.forward(features, training=(mode == tf.estimator.ModeKeys.TRAIN))
@@ -144,13 +147,7 @@ def hard_example_mining(cls_targets, cls_pred, params):
 
         return final_mask, positive_mask
 
-
-def build_losses(cls_targets=None,cls_pred=None, loc_targets=None,loc_pred=None, params=None,is_task_A=False,is_task_B=False):
-
-    # if is_task_A:
-    #     cls_pred = cls_pred[:, :11]
-    # if is_task_B:
-    #     cls_pred = tf.gather(cls_pred, [0]+list(range(11, 21)), axis=1)
+def build_ssd_losses(cls_targets=None,cls_pred=None, loc_targets=None,loc_pred=None, params=None):
 
     cross_entropy = tf.losses.sparse_softmax_cross_entropy(labels=cls_targets,logits=cls_pred) * (params['negative_ratio'] + 1.)
     tf.identity(cross_entropy, name='cross_entropy_loss')
@@ -176,73 +173,34 @@ def build_losses(cls_targets=None,cls_pred=None, loc_targets=None,loc_pred=None,
 
     return cross_entropy, loc_loss, l2_loss
 
-def dist_build_losses(cls_targets=None,cls_pred=None, loc_targets=None,loc_pred=None, params=None):
-    cls_targets = cls_targets[:]
-    cls_pred = cls_pred[:,:11]
-    # loc_targets = None
-    # loc_pred = None
 
-    cross_entropy = tf.losses.sparse_softmax_cross_entropy(labels=cls_targets, logits=cls_pred) * (
-                params['negative_ratio'] + 1.)
-    tf.identity(cross_entropy, name='cross_entropy_loss')
-    tf.summary.scalar('cross_entropy_loss', cross_entropy)
+def build_distillation_loss(cls_pred,loc_pred,taskA_cls_pred,taskA_loc_pred,params):
+    # dist_cls_pred ->shape：（B,all_anchors,21）
+    # dist_location_pred ->shape:(B,all_anchors,4)
 
-    # loc_loss = tf.cond(n_positives > 0, lambda: modified_smooth_l1(location_pred, tf.stop_gradient(flatten_loc_targets), sigma=1.), lambda: tf.zeros_like(location_pred))
-    loc_loss = modified_smooth_l1(loc_pred, loc_targets, sigma=1.)
-    loc_loss = tf.reduce_mean(tf.reduce_sum(loc_loss, axis=-1), name='location_loss')
-    tf.summary.scalar('location_loss', loc_loss)
-    tf.losses.add_loss(loc_loss)
+    # select hard anchors
+    taskA_cls_score = tf.nn.softmax(taskA_cls_pred)
+    k = 128
+    _,hard_anchors_index = tf.nn.top_k(-taskA_cls_score[:,:,0],k)
+    dist_cls_pred = tf.batch_gather(taskA_cls_pred,hard_anchors_index)
+    dist_loc_pred = tf.batch_gather(taskA_loc_pred,hard_anchors_index)
+    cls_pred = tf.batch_gather(cls_pred,hard_anchors_index)
+    loc_pred = tf.batch_gather(loc_pred,hard_anchors_index)
 
-    # loss for regularization
-    l2_loss_vars = []
-    for trainable_var in tf.trainable_variables():
-        if '_bn' not in trainable_var.name:
-            if 'conv4_3_scale' not in trainable_var.name:
-                l2_loss_vars.append(tf.nn.l2_loss(trainable_var))
-            else:
-                l2_loss_vars.append(tf.nn.l2_loss(trainable_var) * 0.1)
-    # Add weight decay to the loss. We exclude the batch norm variables because
-    # doing so leads to a small improvement in accuracy.
-    l2_loss = tf.multiply(params['weight_decay'], tf.add_n(l2_loss_vars), name='l2_loss')
+    # flatten
+    flatten_dist_cls_pred = tf.reshape(dist_cls_pred,[-1,params["num_classes"]])
+    flatten_dist_loc_pred = tf.reshape(dist_loc_pred,[-1,4])
+    flatten_cls_pred = tf.reshape(cls_pred,[-1,params["num_classes"]])
+    flatten_loc_pred  = tf.reshape(loc_pred,[-1,4])
 
-    return cross_entropy, loc_loss, l2_loss
-
-
-def build_distillation_loss(features,cls_pred,location_pred,mode,all_num_anchors_depth,params):
-    with tf.variable_scope('distillation', values=[features]):
-        # dist_backbone = ssd_net.VGG16Backbone(params['data_format'])
-        dist_backbone = se_ssd_net.SE_SSD300_NET(params['data_format'])
-        dist_feature_layers = dist_backbone.forward(features, training=(mode == tf.estimator.ModeKeys.TRAIN))
-        dist_location_pred, dist_cls_pred = dist_backbone.multibox_head(dist_feature_layers, params['num_classes'],
-                                                                  all_num_anchors_depth,
-                                                                  data_format=params['data_format'])
-        if params['data_format'] == 'channels_first':
-            dist_cls_pred = [tf.transpose(pred, [0, 2, 3, 1]) for pred in dist_cls_pred]
-            dist_location_pred = [tf.transpose(pred, [0, 2, 3, 1]) for pred in dist_location_pred]
-        dist_cls_pred = [tf.reshape(pred, [tf.shape(features)[0], -1, params['num_classes']]) for pred in dist_cls_pred]
-        dist_location_pred = [tf.reshape(pred, [tf.shape(features)[0], -1, 4]) for pred in dist_location_pred]
-        dist_cls_pred = tf.concat(dist_cls_pred, axis=1)
-        dist_location_pred = tf.concat(dist_location_pred, axis=1)
-        dist_cls_pred = tf.reshape(dist_cls_pred, [-1, params['num_classes']])
-        dist_location_pred = tf.reshape(dist_location_pred, [-1, 4])
-        # class_distillation_loss
-        cls_logits = cls_pred[:, :params['cached_classes'] + 1] - tf.reduce_mean(
-            cls_pred[:, :params['cached_classes'] + 1], axis=1, keep_dims=True)
-        cls_distillated_logits = dist_cls_pred[:, :params['cached_classes'] + 1] - tf.reduce_mean(
-            dist_cls_pred[:, :params['cached_classes'] + 1], axis=1, keep_dims=True)
-        class_distillation_loss = tf.reduce_mean(tf.square(cls_logits - cls_distillated_logits),
-                                                 name='class_distillation_loss')
-        class_distillation_loss *= params.get('class_distillation_loss_coef', 1)
-        tf.summary.scalar('class_distillation_loss', class_distillation_loss)
-
-        # 只惩罚那些negative的bboxes?
-        bboxes_distillation_loss = tf.reduce_mean(
-            tf.reduce_mean(tf.square(location_pred - dist_location_pred), axis=1, keep_dims=True),
-            name='bboxes_distillation_loss')
-        bboxes_distillation_loss *= params.get('bbox_distillation_loss_coef', 1)
-        tf.summary.scalar('bboxes_distillation_loss', bboxes_distillation_loss)
-
-        return class_distillation_loss, bboxes_distillation_loss
+    # calculate losses
+    dist_cls_loss = tf.reduce_mean(tf.reduce_sum(tf.square(flatten_cls_pred-flatten_dist_cls_pred),axis=-1),name='dist_cls_loss')
+    tf.summary.scalar('dist_cls_loss', dist_cls_loss)
+    dist_loc_loss = tf.reduce_mean(tf.reduce_sum(tf.square(flatten_loc_pred-flatten_dist_loc_pred),axis=-1),name='dist_loc_loss')
+    tf.summary.scalar('dist_loc_loss', dist_loc_loss)
+    dist_loss = tf.reduce_mean(dist_cls_loss+dist_loc_loss,name='dist_loss')
+    tf.summary.scalar('dist_loss',dist_loss)
+    return dist_loss
 
 
 def ssd_model_fn(features, labels, mode, params):
@@ -255,6 +213,7 @@ def ssd_model_fn(features, labels, mode, params):
     # calculate the number of anchors of each feature layer.
     num_anchors_per_layer = [depth * spatial for depth, spatial in zip(all_num_anchors_depth, all_num_anchors_spatial)]
 
+    # for training
     processed_image = features['preprocessed_image']
 
     # for prediction
@@ -264,6 +223,11 @@ def ssd_model_fn(features, labels, mode, params):
     true_image_shape = features['true_image_shape']
     key = features["key"]
 
+    # with tf.control_dependencies([tf.print(original_image_spatial_shape+1),tf.print(original_image_spatial_shape)]):
+    #     # cls_pred -> shape: [batch_size,num_all_anchors,21]
+    #     # location_pred -> shape: [batch_size,num_all_anchors,4]
+    #     cls_pred, location_pred = predict(processed_image, mode, params, all_num_anchors_depth,
+    #                                       scope_name=params['model_scope'])
 
 
     anchor_encoder_decoder = anchor_manipulator.AnchorEncoder(positive_threshold=params['positive_threshold'],
@@ -282,9 +246,9 @@ def ssd_model_fn(features, labels, mode, params):
                                   num_anchors_per_layer=num_anchors_per_layer)
 
 
-    # cls_pred -> shape: [batch_size,num_all_anchors,21]
-    # location_pred -> shape: [batch_size,num_all_anchors,4]
-    cls_pred, location_pred = predict(processed_image,mode,params,all_num_anchors_depth)
+    # # cls_pred -> shape: [batch_size,num_all_anchors,21]
+    # # location_pred -> shape: [batch_size,num_all_anchors,4]
+    cls_pred, location_pred = predict(processed_image,mode,params,all_num_anchors_depth,scope_name=params['model_scope'])
 
     # decode boxes  这里可能有问题？ bboxes_pred 的所有anchors 是按照feature layer的顺序排列的
 
@@ -302,7 +266,7 @@ def ssd_model_fn(features, labels, mode, params):
                                                                 nms_threshold=params['nms_threshold'],
                                                                 is_tack_A=params['is_tack_A'],
                                                                 is_task_B=params['is_tack_B'],
-                                                                num_classes = params['num_classes']
+                                                                num_classes=params['num_classes']
                                                                 )
     if mode == tf.estimator.ModeKeys.PREDICT:
         cls_pred = tf.reshape(cls_pred, [-1, params['num_classes']])
@@ -371,13 +335,15 @@ def ssd_model_fn(features, labels, mode, params):
                                        tf.argmax(flatten_cls_pred_hard_exam_mining, axis=-1))
     tf.identity(cls_accuracy[1], name='cls_accuracy')
     tf.summary.scalar('cls_accuracy', cls_accuracy[1])
+
     # losses
-    cross_entropy, loc_loss, l2_loss = build_losses(cls_targets=flatten_cls_targets_hard_exam_mining,
+    cross_entropy, loc_loss, l2_loss = build_ssd_losses(cls_targets=flatten_cls_targets_hard_exam_mining,
                                                     cls_pred=flatten_cls_pred_hard_exam_mining,
                                                     loc_targets=flatten_loc_targets_hard_exam_mining,
                                                     loc_pred=flatten_location_pred_hard_exam_mining,
                                                     params=params)
-    total_loss = tf.add_n([cross_entropy, loc_loss, l2_loss], name='total_loss')
+    # total_loss = tf.add_n([cross_entropy, loc_loss, l2_loss], name='total_loss')
+    total_loss = tf.add_n([cross_entropy, loc_loss], name='total_loss')
 
     #  evaluation
     metrics = {}
@@ -420,11 +386,12 @@ def ssd_model_fn(features, labels, mode, params):
             num_detections = tf.cast(tf.stack(num_detections_list, axis=0), tf.int32)
 
             tf.identity(num_detections[0], name="num_detections_after_nms")
-
+            # original_image = unpad_tensor(features['original_image'],[original_image_spatial_shape[0],original_image_spatial_shape[1],3])
+            # true_image_shape = tf.concat([original_image_spatial_shape,tf.reshape([3]*(tf.shape(original_image_spatial_shape)[0]),[-1,1])],axis=1)
             eval_input_dict = {
                 'original_image_spatial_shape': original_image_spatial_shape,
                 'true_image_shape': true_image_shape,
-                'original_image': features['original_image'],
+                # 'original_image': features['original_image'],
                 # goundtruths
                 'num_groundtruth_boxes_per_image': num_groundtruth_boxes,
                 'groundtruth_boxes': unpaded_groundtruth_boxes,
@@ -441,13 +408,13 @@ def ssd_model_fn(features, labels, mode, params):
             category_index = {VOC_LABELS[name][0]: {"id": VOC_LABELS[name][0], "name": name} for name in
                               VOC_LABELS.keys()}
             categories = list(category_index.values())
-            # visualization detections result
+            # # visualization detections result
             # eval_metric_op_vis = visualization_utils.VisualizeSingleFrameDetections(
             #     category_index,
             #     max_examples_to_draw=params['max_examples_to_draw'],
             #     max_boxes_to_draw=params['max_boxes_to_draw'],
             #     min_score_thresh=params['min_score_thresh'],
-            #     use_normalized_coordinates=False)
+            #     use_normalized_coordinates=True)
             # vis_metric_ops = eval_metric_op_vis.get_estimator_eval_metric_ops(eval_input_dict)
             # metrics.update(vis_metric_ops)
 
@@ -458,12 +425,18 @@ def ssd_model_fn(features, labels, mode, params):
             eval_metric_ops = evaluator.get_estimator_eval_metric_ops(eval_input_dict)
             metrics.update(eval_metric_ops)
 
+    # train
     if mode == tf.estimator.ModeKeys.TRAIN:
         # distillate knowledge
         if params["distillation"] == True:
-            class_distillation_loss, bboxes_distillation_loss = build_distillation_loss(processed_image,cls_pred,location_pred,mode,all_num_anchors_depth,params)
-            total_loss = tf.add_n(total_loss,class_distillation_loss,bboxes_distillation_loss,name="total_loss_with_distillation")
-            tf.summary.scalar('total_loss_with_distillation', total_loss)
+            taskA_cls_pred, taskA_loc_pred = predict(processed_image, mode, params, all_num_anchors_depth,scope_name="distillation_sub_net")
+            taskA_cls_pred, taskA_loc_pred = tf.stop_gradient(taskA_cls_pred), tf.stop_gradient(taskA_loc_pred)
+            # with tf.control_dependencies([tf.print(cls_pred[0,0,:5]),tf.print(taskA_cls_pred[0,0,:5])]):
+            dist_loss = build_distillation_loss(cls_pred,location_pred,taskA_cls_pred, taskA_loc_pred,params)
+            lembda = 2
+            total_loss = tf.add_n([total_loss,lembda*dist_loss],name='total_loss_dist')
+            tf.identity(tf.get_default_graph().get_tensor_by_name('distillation_sub_net/additional_layers/conv11/conv11_1/bias:0')[0],name='monitor_dist_weight')
+            tf.summary.scalar('total_loss_dist', total_loss)
 
         global_step = tf.train.get_or_create_global_step()
         # dynamic learning rate
@@ -471,7 +444,7 @@ def ssd_model_fn(features, labels, mode, params):
         learning_rate = tf.train.piecewise_constant(tf.cast(global_step, tf.int32),
                                                     [int(_) for _ in params['decay_boundaries']],
                                                     lr_values)
-        # learning_rate = tf.constant(params['learning_rate'])
+        # learning_rate = tf.constant(1e-3)
         # execute truncated_learning_rate
         truncated_learning_rate = tf.maximum(learning_rate,
                                              tf.constant(params['end_learning_rate'], dtype=learning_rate.dtype),
@@ -497,6 +470,7 @@ def ssd_model_fn(features, labels, mode, params):
         loss=total_loss,
         train_op=train_op,
         eval_metric_ops=metrics,
+        scaffold = tf.train.Scaffold(init_fn=get_dist_init_fn(params['model_dir'],params['checkpoint_path'],params['model_scope'])),
         # scaffold=tf.train.Scaffold(init_fn=get_init_fn(params['model_dir'],params['checkpoint_path'],params['model_scope'],params['checkpoint_model_scope'],params['checkpoint_exclude_scopes'],params['ignore_missing_vars'])),
         # scaffold=tf.train.Scaffold(init_op=init_op)
     )

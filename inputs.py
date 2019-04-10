@@ -84,7 +84,7 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
 
         # # filter class
         if class_list:
-            valid_class_mask = glabels_raw > 10
+            valid_class_mask = glabels_raw <= 10
             glabels_raw = tf.boolean_mask(glabels_raw, valid_class_mask)
             gbboxes_raw = tf.boolean_mask(gbboxes_raw, valid_class_mask)
             isdifficult = tf.boolean_mask(isdifficult, valid_class_mask)
@@ -92,7 +92,7 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
         return (original_image,original_shape,filename,glabels_raw,gbboxes_raw,isdifficult,key)
 
     def filter_fn(original_image, original_shape, filename, glabels_raw, gbboxes_raw, isdifficult, key):
-        return tf.not_equal(tf.count_nonzero(glabels_raw > 10),0)
+        return tf.not_equal(tf.count_nonzero(glabels_raw <= 10),0)
 
     def process_fn(original_image,original_shape,filename,glabels_raw,gbboxes_raw,isdifficult,key):
         # filter difficult example
@@ -109,11 +109,12 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
         if is_training:
             preprocessed_image, groundtruth_classes, groundtruth_boxes, true_image_shape = image_preprocessing_fn(original_image, glabels_raw, gbboxes_raw)
         else:
-            image_before_normalization, preprocessed_image, true_image_shape = image_preprocessing_fn(original_image, glabels_raw, gbboxes_raw)
+            preprocessed_image, true_image_shape = image_preprocessing_fn(original_image, glabels_raw, gbboxes_raw)
             groundtruth_classes, groundtruth_boxes = glabels_raw, gbboxes_raw
 
-        num_groundtruth_boxes = tf.shape(groundtruth_boxes)[0]
         max_num_bboxes = 50
+        num_groundtruth_boxes = tf.minimum(tf.shape(groundtruth_boxes)[0],max_num_bboxes)
+
 
         # padding in num_bboxes dimension
         groundtruth_classes = pad_or_clip_nd(groundtruth_classes,output_shape = [max_num_bboxes])
@@ -141,8 +142,8 @@ def build_dataset(class_list=None,file_pattern=None,is_training=True, batch_size
 
                   }
 
-        if not is_training:
-            features['original_image'] = image_before_normalization
+        # if not is_training:
+        #     features['original_image'] = pad_or_clip_nd(original_image,[2000,2000,3])
 
         return features, labels
 

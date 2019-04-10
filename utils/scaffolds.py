@@ -21,6 +21,38 @@ import sys
 
 import tensorflow as tf
 
+def dist_init_fn(model_dir, checkpoint_path,model_scope,dist_scope):
+    if tf.train.latest_checkpoint(model_dir):
+        tf.logging.info('Ignoring --checkpoint_path because a checkpoint already exists in %s.' % model_dir)
+        return None
+
+    ssd_variables_to_restore = {}
+    dist_variables_to_restore = {}
+    for var in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):
+        var_name = var.op.name
+        if var_name.startswith(model_scope):
+            ssd_variables_to_restore[var_name] = var
+        if var_name.startswith(dist_scope):
+            dist_variables_to_restore[var_name.replace(dist_scope,model_scope)] = var
+    checkpoint_path = tf.train.latest_checkpoint(checkpoint_path) if tf.gfile.IsDirectory(checkpoint_path) else checkpoint_path
+    reader = tf.train.NewCheckpointReader(checkpoint_path)
+
+    if not ssd_variables_to_restore:
+        raise ValueError('ssd_variables_to_restore cannot be empty')
+    if not dist_variables_to_restore:
+        raise ValueError('dist_variables_to_restore cannot be empty')
+
+    saver1 = tf.train.Saver(ssd_variables_to_restore, reshape=False)
+    saver2 = tf.train.Saver(dist_variables_to_restore, reshape=False)
+    saver1.build()
+    saver2.build()
+    def callback(scaffold, session):
+        saver1.restore(session, checkpoint_path)
+        saver2.restore(session, checkpoint_path)
+    return callback
+
+
+
 def get_init_fn_for_scaffold(model_dir, checkpoint_path, model_scope, checkpoint_model_scope, checkpoint_exclude_scopes, ignore_missing_vars, name_remap=None):
     if tf.train.latest_checkpoint(model_dir):
         tf.logging.info('Ignoring --checkpoint_path because a checkpoint already exists in %s.' % model_dir)

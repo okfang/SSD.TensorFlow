@@ -484,7 +484,6 @@ def preprocess_for_eval(image, out_shape, data_format='channels_first', scope='s
   with tf.name_scope(scope, 'ssd_preprocessing_eval', [image]):
     image = tf.to_float(image)
     image = tf.image.resize_images(image, out_shape, method=tf.image.ResizeMethod.BILINEAR, align_corners=False)
-    image_before_normalization = image
     image.set_shape(out_shape + [3])
     image = _mean_image_subtraction(image, [_R_MEAN, _G_MEAN, _B_MEAN])
     if not output_rgb:
@@ -492,7 +491,7 @@ def preprocess_for_eval(image, out_shape, data_format='channels_first', scope='s
       image = tf.stack([image_channels[2], image_channels[1], image_channels[0]], axis=-1, name='merge_bgr')
     # Image data format.
     true_image_shape = tf.shape(image)
-    return image_before_normalization, image,true_image_shape
+    return image,true_image_shape
 
 def preprocess_image(image, labels, bboxes, out_shape, is_training=False, data_format='channels_first', output_rgb=True):
   """Preprocesses the given image.

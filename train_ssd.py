@@ -41,21 +41,7 @@ tf.app.flags.DEFINE_integer(
     'The number of cpu cores used to train.')
 tf.app.flags.DEFINE_float(
     'gpu_memory_fraction', 1., 'GPU memory fraction to use.')
-# scaffold related configuration
-tf.app.flags.DEFINE_string(
-    'data_dir', '/home/dxfang/dataset/tfrecords/pascal_voc/',
-    'The directory where the dataset input data is stored.')
-tf.app.flags.DEFINE_integer(
-    'num_classes', 21, 'Number of classes to use in the dataset.')
-tf.app.flags.DEFINE_integer(
-    'log_every_n_steps',50,
-    'The frequency with which logs are printed.')
-tf.app.flags.DEFINE_integer(
-    'save_summary_steps', 500,
-    'The frequency with which summaries are saved, in seconds.')
-tf.app.flags.DEFINE_integer(
-    'save_checkpoints_secs', None,
-    'The frequency with which the model is saved, in seconds.')
+
 # model related configuration
 tf.app.flags.DEFINE_integer(
     'train_image_size', 300,
@@ -67,7 +53,7 @@ tf.app.flags.DEFINE_integer(
     'max_number_of_steps', 120000,
     'The max number of steps to use for training.')
 tf.app.flags.DEFINE_integer(
-    'batch_size',16,
+    'batch_size', 16,
     'Batch size for training and evaluation.')
 tf.app.flags.DEFINE_string(
     'data_format', 'channels_last',  # 'channels_first' or 'channels_last'
@@ -89,16 +75,16 @@ tf.app.flags.DEFINE_float(
 tf.app.flags.DEFINE_float(
     'momentum', 0.9,
     'The momentum for the MomentumOptimizer and RMSPropOptimizer.')
-tf.app.flags.DEFINE_float('learning_rate', 1e-3, 'Initial learning rate.')
+tf.app.flags.DEFINE_float('learning_rate', 1e-4, 'Initial learning rate.')
 tf.app.flags.DEFINE_float(
     'end_learning_rate', 0.000001,
     'The minimal end learning rate used by a polynomial decay learning rate.')
 # for learning rate piecewise_constant decay
 tf.app.flags.DEFINE_string(
-    'decay_boundaries', '500,50000',
+    'decay_boundaries', '50000',
     'Learning rate decay boundaries by global_step (comma-separated list).')
 tf.app.flags.DEFINE_string(
-    'lr_decay_factors', '0.1,1,0.1',
+    'lr_decay_factors', '1,0.1',
     'The values of learning_rate decay factor for each segment between boundaries (comma-separated list).')
 
 tf.app.flags.DEFINE_string(
@@ -133,17 +119,33 @@ tf.app.flags.DEFINE_integer(
 tf.app.flags.DEFINE_integer(
     'max_examples_to_draw', 30, 'Number of image to draw while eval.')
 tf.app.flags.DEFINE_integer(
-    'max_boxes_to_draw',20, 'Number of bbox to draw per image while eval.')
+    'max_boxes_to_draw', 20, 'Number of bbox to draw per image while eval.')
 tf.app.flags.DEFINE_float(
-    'min_score_thresh',0.2, 'min score of bbox to draw')
+    'min_score_thresh', 0.2, 'min score of bbox to draw')
 
 # distillation configuration
 tf.app.flags.DEFINE_integer(
-    'step1_classes',10,'Number of classes use for training first task'
+    'step1_classes', 10, 'Number of classes use for training first task'
 )
 tf.app.flags.DEFINE_integer(
-    'step2_classes',10,'Number of classes use for training second task'
+    'step2_classes', 10, 'Number of classes use for training second task'
 )
+
+# scaffold related configuration
+tf.app.flags.DEFINE_string(
+    'data_dir', '/home/dxfang/dataset/tfrecords/pascal_voc/',
+    'The directory where the dataset input data is stored.')
+tf.app.flags.DEFINE_integer(
+    'num_classes', 21, 'Number of classes to use in the dataset.')
+tf.app.flags.DEFINE_integer(
+    'log_every_n_steps', 50,
+    'The frequency with which logs are printed.')
+tf.app.flags.DEFINE_integer(
+    'save_summary_steps', 50,
+    'The frequency with which summaries are saved, in seconds.')
+tf.app.flags.DEFINE_integer(
+    'save_checkpoints_secs', None,
+    'The frequency with which the model is saved, in seconds.')
 
 # '2019-03-21-13-32-46_w_pretrained_wo_bn'
 # 'pretrained_ssd'
@@ -152,39 +154,43 @@ tf.app.flags.DEFINE_integer(
 # '2019-04-02-00-53-50_pretrained_w_bn_SEnet_sigmoid_tem_1e-1'
 # '2019-04-07-23-34-01_disstion_taskA_SEnet_1e-1'
 # '2019-04-08-13-16-19_disstion_taskB_SEnet_1e-1'
+# '2019-04-09-14-06-55_disstion_taskA(11-20)_original'
+# '2019-04-10-00-24-20_taskB(1-10)_distillation_ssd'
 save_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-model_dir_string = os.path.join('./logs','2019-04-08-20-06-26_incremental_evaluate_all_class')
+model_dir_string = os.path.join('./logs', '2019-04-10-10-43-55_taskB(1-10)_distillation_ssd')
 tf.app.flags.DEFINE_string(
     'model_dir', model_dir_string,
     'The directory where the model will be stored.')
 
 # checkpoint related configuration
 tf.app.flags.DEFINE_string(
-    'checkpoint_path', './logs/2019-04-07-23-34-01_disstion_taskA_SEnet_1e-1',
+    'checkpoint_path', './logs/2019-04-09-14-06-55_disstion_taskA(11-20)_original',
     'The path to a checkpoint from which to fine-tune.')
 
 FLAGS = tf.app.flags.FLAGS
 
+
 def parse_comma_list(args):
     return [float(s.strip()) for s in args.split(',')]
+
 
 def main(_):
     # Using the Winograd non-fused algorithms provides a small performance boost.
     # gpu config
     os.environ['TF_ENABLE_WINOGRAD_NONFUSED'] = '1'
     # multi gpu training strategy
-    distribute_strategy = tf.contrib.distribute.MirroredStrategy(num_gpus=2)
+    # distribute_strategy = tf.contrib.distribute.MirroredStrategy(num_gpus=2)
     # Set up a RunConfig to only save checkpoints once per training cycle.
     run_config = tf.estimator.RunConfig().replace(
         save_checkpoints_secs=FLAGS.save_checkpoints_secs).replace(
-        save_checkpoints_steps=1000).replace(
+        save_checkpoints_steps=100).replace(
         save_summary_steps=FLAGS.save_summary_steps).replace(
         keep_checkpoint_max=5).replace(
         tf_random_seed=FLAGS.tf_random_seed).replace(
-        log_step_count_steps=FLAGS.log_every_n_steps)\
-        .replace(
-            train_distribute=distribute_strategy
-        )
+        log_step_count_steps=FLAGS.log_every_n_steps) \
+        # .replace(
+    #     train_distribute=distribute_strategy
+    # )
     estimator_params = {
         # training
         'num_gpus': 2,
@@ -226,17 +232,16 @@ def main(_):
         'min_score_thresh': FLAGS.min_score_thresh,
 
         # distillation
-        'distillation': False,
+        'distillation': True,
         'is_tack_A': False,
         'is_tack_B': False
     }
-
     ssd_detector = tf.estimator.Estimator(
         model_fn=ssd_model_fn, model_dir=FLAGS.model_dir, config=run_config,
         params=estimator_params,
         # warm_start_from=FLAGS.checkpoint_path
-        warm_start_from=None
-        )
+        # warm_start_from=None
+    )
 
     # log tensor
     train_tensors_to_log = {
@@ -247,10 +252,19 @@ def main(_):
         'l2': 'l2_loss',
         'acc': 'cls_accuracy',
         'num_positives': 'hard_example_mining/num_positives',
-        'num_negatives_selected': 'hard_example_mining/num_negatives_select'
+        'num_negatives_selected': 'hard_example_mining/num_negatives_select',
     }
+    if estimator_params['distillation'] == True:
+        train_tensors_to_log.update({
+            'dist_cls_loss': 'dist_cls_loss',
+            'dist_loc_loss': 'dist_loc_loss',
+            'dist_loss': 'dist_loss',
+            'total_loss_dist': 'total_loss_dist',
+            'monitor_dist_weight': 'monitor_dist_weight'})
+
     train_logging_hook = tf.train.LoggingTensorHook(tensors=train_tensors_to_log, every_n_iter=FLAGS.log_every_n_steps,
-                                              formatter = lambda dicts: (', '.join(['%s=%.6f' % (k, v) for k, v in dicts.items()])))
+                                                    formatter=lambda dicts: (
+                                                        ', '.join(['%s=%.6f' % (k, v) for k, v in dicts.items()])))
     eval_tensors_to_log = {
         'ce': 'cross_entropy_loss',
         'loc': 'location_loss',
@@ -262,28 +276,32 @@ def main(_):
         'num_detections_after_nms': 'evaluation_scope/num_detections_after_nms'
     }
     eval_logging_hook = tf.train.LoggingTensorHook(tensors=eval_tensors_to_log, every_n_iter=FLAGS.log_every_n_steps,
-                                                   formatter=lambda dicts: (', '.join(['%s=%.6f' % (k, v) for k, v in dicts.items()])))
+                                                   formatter=lambda dicts: (
+                                                       ', '.join(['%s=%.6f' % (k, v) for k, v in dicts.items()])))
 
     train_input_pattern = '/home/dxfang/dataset/tfrecords/pascal_voc/train-000*'
-    eval_input_pattern ='/home/dxfang/dataset/tfrecords/pascal_voc/val-000*'
+    eval_input_pattern = '/home/dxfang/dataset/tfrecords/pascal_voc/val-000*'
 
     print('Starting a training cycle.')
-    task_A_list = list(range(1,11))
-    task_B_list = list(range(11,21))
+    task_A_list = list(range(1, 11))
+    task_B_list = list(range(11, 21))
     # task_A_list = None
     train_spec = tf.estimator.TrainSpec(
-        input_fn=input_pipeline(class_list=task_B_list,file_pattern=train_input_pattern, is_training=True, batch_size=FLAGS.batch_size,data_format=FLAGS.data_format),
+        input_fn=input_pipeline(class_list=task_A_list, file_pattern=train_input_pattern, is_training=True,
+                                batch_size=FLAGS.batch_size, data_format=FLAGS.data_format),
         max_steps=FLAGS.max_number_of_steps,
-        hooks= [train_logging_hook],
+        hooks=[train_logging_hook],
     )
     eval_spec = tf.estimator.EvalSpec(
-        input_fn=input_pipeline(class_list=None,file_pattern=eval_input_pattern, is_training=False, batch_size=FLAGS.batch_size,data_format=FLAGS.data_format,num_readers=1),
+        input_fn=input_pipeline(class_list=None, file_pattern=eval_input_pattern, is_training=False,
+                                batch_size=FLAGS.batch_size, data_format=FLAGS.data_format, num_readers=1),
         hooks=[eval_logging_hook],
+        steps=100,
         start_delay_secs=0,
         throttle_secs=0
     )
 
-    tf.estimator.train_and_evaluate(ssd_detector,train_spec,eval_spec)
+    tf.estimator.train_and_evaluate(ssd_detector, train_spec, eval_spec)
 
     # ssd_detector.train(
     #     input_fn=input_pipeline(class_list=None,
@@ -295,17 +313,15 @@ def main(_):
     #     hooks=[train_logging_hook]
     # )
 
-
-    # ssd_detector.evaluate(input_fn=input_pipeline(class_list=None,
+    # ssd_detector.evaluate(input_fn=input_pipeline(class_list=task_A_list,
     #                                               file_pattern=eval_input_pattern,
     #                                               is_training=False,
     #                                               batch_size=FLAGS.batch_size,
     #                                               data_format=FLAGS.data_format,
     #                                               num_readers=1),
+    #                       steps=30,
     #                       hooks=[eval_logging_hook],
     #                       )
-
-
 
     predict = False
     if predict:
@@ -343,6 +359,7 @@ def main(_):
                                 format(filename.decode('utf8')[:-4], scores[det_ind],
                                        bboxes[det_ind, 1], bboxes[det_ind, 0],
                                        bboxes[det_ind, 3], bboxes[det_ind, 2]))
+
 
 if __name__ == '__main__':
     tf.logging.set_verbosity(tf.logging.INFO)
