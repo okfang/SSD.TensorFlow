@@ -343,7 +343,7 @@ def ssd_model_fn(features, labels, mode, params):
                                                     loc_pred=flatten_location_pred_hard_exam_mining,
                                                     params=params)
     # total_loss = tf.add_n([cross_entropy, loc_loss, l2_loss], name='total_loss')
-    total_loss = tf.add_n([cross_entropy, loc_loss], name='total_loss')
+    total_loss = tf.add_n([cross_entropy, loc_loss,l2_loss], name='total_loss')
 
     #  evaluation
     metrics = {}
@@ -435,7 +435,7 @@ def ssd_model_fn(features, labels, mode, params):
             dist_loss = build_distillation_loss(cls_pred,location_pred,taskA_cls_pred, taskA_loc_pred,params)
             lembda = 2
             total_loss = tf.add_n([total_loss,lembda*dist_loss],name='total_loss_dist')
-            tf.identity(tf.get_default_graph().get_tensor_by_name('distillation_sub_net/additional_layers/conv11/conv11_1/bias:0')[0],name='monitor_dist_weight')
+            # tf.identity(tf.get_default_graph().get_tensor_by_name('distillation_sub_net/additional_layers/conv11/conv11_1/bias:0')[0],name='monitor_dist_weight')
             tf.summary.scalar('total_loss_dist', total_loss)
 
         global_step = tf.train.get_or_create_global_step()
@@ -470,7 +470,7 @@ def ssd_model_fn(features, labels, mode, params):
         loss=total_loss,
         train_op=train_op,
         eval_metric_ops=metrics,
-        scaffold = tf.train.Scaffold(init_fn=get_dist_init_fn(params['model_dir'],params['checkpoint_path'],params['model_scope'])),
+        # scaffold = tf.train.Scaffold(init_fn=get_dist_init_fn(params['model_dir'],params['checkpoint_path'],params['model_scope'])),
         # scaffold=tf.train.Scaffold(init_fn=get_init_fn(params['model_dir'],params['checkpoint_path'],params['model_scope'],params['checkpoint_model_scope'],params['checkpoint_exclude_scopes'],params['ignore_missing_vars'])),
         # scaffold=tf.train.Scaffold(init_op=init_op)
     )
