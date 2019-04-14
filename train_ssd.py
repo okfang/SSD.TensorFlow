@@ -75,7 +75,7 @@ tf.app.flags.DEFINE_float(
 tf.app.flags.DEFINE_float(
     'momentum', 0.9,
     'The momentum for the MomentumOptimizer and RMSPropOptimizer.')
-tf.app.flags.DEFINE_float('learning_rate', 1e-3, 'Initial learning rate.')
+tf.app.flags.DEFINE_float('learning_rate', 1e-4, 'Initial learning rate.')
 tf.app.flags.DEFINE_float(
     'end_learning_rate', 0.000001,
     'The minimal end learning rate used by a polynomial decay learning rate.')
@@ -138,10 +138,10 @@ tf.app.flags.DEFINE_string(
 tf.app.flags.DEFINE_integer(
     'num_classes', 21, 'Number of classes to use in the dataset.')
 tf.app.flags.DEFINE_integer(
-    'log_every_n_steps', 100,
+    'log_every_n_steps', 10,
     'The frequency with which logs are printed.')
 tf.app.flags.DEFINE_integer(
-    'save_summary_steps', 50,
+    'save_summary_steps', 10,
     'The frequency with which summaries are saved, in seconds.')
 tf.app.flags.DEFINE_integer(
     'save_checkpoints_secs', None,
@@ -159,7 +159,7 @@ tf.app.flags.DEFINE_integer(
 # '2019-04-13-00-34-44_taskA(1-10)_original'
 # '2019-04-13-14-07-26_all(1-20)_transfer'
 save_time = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
-model_dir_string = os.path.join('./logs', '2019-04-13-14-07-26_all(1-20)_transfer')
+model_dir_string = os.path.join('./logs', save_time+'_taskB(11-20)_transfer_dist_ce_smoothL1')
 tf.app.flags.DEFINE_string(
     'model_dir', model_dir_string,
     'The directory where the model will be stored.')
@@ -185,14 +185,14 @@ def main(_):
     # Set up a RunConfig to only save checkpoints once per training cycle.
     run_config = tf.estimator.RunConfig().replace(
         save_checkpoints_secs=FLAGS.save_checkpoints_secs).replace(
-        save_checkpoints_steps=5000).replace(
+        save_checkpoints_steps=100).replace(
         save_summary_steps=FLAGS.save_summary_steps).replace(
         keep_checkpoint_max=5).replace(
         tf_random_seed=FLAGS.tf_random_seed).replace(
         log_step_count_steps=FLAGS.log_every_n_steps) \
-        .replace(
-        train_distribute=distribute_strategy
-    )
+    #     .replace(
+    #     train_distribute=distribute_strategy
+    # )
     estimator_params = {
         # training
         'num_gpus': 2,
@@ -233,15 +233,17 @@ def main(_):
         'max_boxes_to_draw': FLAGS.max_boxes_to_draw,
         'min_score_thresh': FLAGS.min_score_thresh,
 
-        # distillationi
-        'distillation': False,
+        # distillation
+        'distillation': True,
+        'transfer':True,
+        'backbone_freezing': True,
         'is_tack_A': False,
         'is_tack_B': False
     }
     ssd_detector = tf.estimator.Estimator(
         model_fn=ssd_model_fn, model_dir=FLAGS.model_dir, config=run_config,
         params=estimator_params,
-        warm_start_from=FLAGS.checkpoint_path
+        # warm_start_from=FLAGS.checkpoint_path
         # warm_start_from=None
     )
 
@@ -255,15 +257,18 @@ def main(_):
         'l2': 'l2_loss',
         'acc': 'cls_accuracy',
         'num_positives': 'hard_example_mining/num_positives',
-        'num_negatives_selected': 'hard_example_mining/num_negatives_select',
+        'num_negatives_selected': 'hard_example_mining/num_negatives_select'
     }
     if estimator_params['distillation'] == True:
         train_tensors_to_log.update({
             'dist_cls_loss': 'dist_cls_loss',
             'dist_loc_loss': 'dist_loc_loss',
             'dist_loss': 'dist_loss',
-            'total_loss_dist': 'total_loss_dist',
-            # 'monitor_dist_weight': 'monitor_dist_weight'
+            'monitor_dist_weight': 'monitor_dist_weight'
+        })
+    if estimator_params['transfer'] == True:
+        train_tensors_to_log.update({
+            'monitor_transfer_weight': 'monitor_transfer_weight'
         })
 
     train_logging_hook = tf.train.LoggingTensorHook(tensors=train_tensors_to_log, every_n_iter=FLAGS.log_every_n_steps,
@@ -291,13 +296,13 @@ def main(_):
     task_B_list = list(range(11, 21))
     # task_A_list = None
     train_spec = tf.estimator.TrainSpec(
-        input_fn=input_pipeline(class_list=None, file_pattern=train_input_pattern, is_training=True,
+        input_fn=input_pipeline(class_list=task_B_list, file_pattern=train_input_pattern, is_training=True,
                                 batch_size=FLAGS.batch_size, data_format=FLAGS.data_format),
         max_steps=FLAGS.max_number_of_steps,
         hooks=[train_logging_hook],
     )
     eval_spec = tf.estimator.EvalSpec(
-        input_fn=input_pipeline(class_list=None, file_pattern=eval_input_pattern, is_training=False,
+        input_fn=input_pipeline(class_list=task_B_list, file_pattern=eval_input_pattern, is_training=False,
                                 batch_size=FLAGS.batch_size, data_format=FLAGS.data_format, num_readers=1),
         hooks=[eval_logging_hook],
         steps=100,
